@@ -1,0 +1,50 @@
+name = "outlook-mailbox"
+main = "src/index.ts"
+compatibility_date = "2026-04-07"
+
+[vars]
+PHASE0_STORAGE_MODE = "memory"
+PHASE0_GRAPH_MODE = "mock"
+PHASE0_AUTH_MODE = "mock"
+PHASE0_DELAY_THRESHOLD_MS = "300000"
+PHASE0_DEDUPE_TTL_MS = "600000"
+
+[[durable_objects.bindings]]
+name = "MAILBOX_COORDINATOR"
+class_name = "MailboxCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MailboxCoordinator"]
+
+[[queues.producers]]
+binding = "MAIL_FETCH_QUEUE"
+queue = "mail.fetch"
+
+[[queues.producers]]
+binding = "MAIL_PARSE_QUEUE"
+queue = "mail.parse"
+
+[[queues.producers]]
+binding = "MAIL_RECOVER_QUEUE"
+queue = "mail.recover"
+
+[[queues.producers]]
+binding = "SUBSCRIPTION_RENEW_QUEUE"
+queue = "subscription.renew"
+
+[[queues.consumers]]
+queue = "mail.fetch"
+
+[[queues.consumers]]
+queue = "mail.parse"
+
+[[queues.consumers]]
+queue = "mail.recover"
+
+[[queues.consumers]]
+queue = "subscription.renew"
+
+[[r2_buckets]]
+binding = "MESSAGE_BLOB_BUCKET"
+bucket_name = "outlook-mailbox-phase0"
