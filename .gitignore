@@ -1,5 +1,11 @@
 node_modules/
 .wrangler/
+.playwright-cli/
 dist/
 coverage/
+artifacts/
+output/
 *.log
+.DS_Store
+.dev.vars
+.dev.vars.*

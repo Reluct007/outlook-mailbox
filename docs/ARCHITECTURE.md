@@ -30,7 +30,7 @@
 
 ### V1 要做的
 
-- Outlook Inbox 新邮件接入
+- Outlook 邮件流新消息接入（至少覆盖 Inbox / Junk）
 - mailbox lifecycle coordination
 - 规则驱动的信号提取
 - facts、hit events 与 current signal projection 的持久化
@@ -109,7 +109,7 @@ OTP 首页的核心 read model 应该来自持久化 projection。
 
 ```text
 mailbox onboarding
--> ensure Inbox subscription
+-> ensure mailbox-wide subscription
 -> webhook ingress
 -> mailbox coordinator
 -> fetch message details
@@ -125,7 +125,7 @@ mailbox onboarding
 ```text
 missed notification / stale lifecycle / delayed mailbox
 -> mark mailbox recovery needed
--> run delta query
+-> run mailbox recovery scan
 -> fetch missed messages
 -> re-run rules
 -> repair facts + hits + current signals
@@ -148,6 +148,7 @@ recovery 不是后期优化。
 - reauthorize 入口
 - Graph webhook ingress
 - validationToken
+- operator Basic Auth 边界
 - clientState 校验
 - mailbox routing
 - OTP 首页读接口
@@ -157,6 +158,69 @@ recovery 不是后期优化。
 
 - mailbox state 推进
 - fetch / parse / recover 主逻辑
+
+### Public vs protected route boundary
+
+这一节是当前 Worker route inventory 的 **canonical source of truth**。
+
+README 只引用这里，不再单独维护第二份 endpoint 清单。
+
+Worker 是公网暴露的，但路由边界不是“全部公开”。
+
+#### 公开路由
+
+这几个路由保持公网可达，因为它们承接 OAuth 和 Microsoft Graph 回调：
+
+- `GET /oauth/outlook/start`
+- `GET /oauth/outlook/callback`
+- `POST /api/webhooks/outlook`
+
+#### 受保护的 operator 路由
+
+这些路由都要求 HTTP Basic Auth：
+
+- `GET /`
+- `GET /connect/outlook`
+- `GET /connect/result`
+- `GET /api/mailboxes/connect-intents`
+- `POST /api/mailboxes/connect-intents`
+- `GET /api/otp-panel`
+- `GET /api/hits`
+- `GET /api/messages/:id`
+- `GET /api/mailboxes/:id`
+- `POST /api/mailboxes/:id/reauthorize`
+- `POST /api/mailboxes/:id/recovery`
+
+运行时约束：
+
+- `PHASE0_OPERATOR_PASSWORD` 必填
+- `PHASE0_OPERATOR_USERNAME` 可选，默认 `operator`
+
+这条边界的意义很直接：
+
+- 公开的是接入闭环
+- 受保护的是 OTP、message detail、mailbox diagnostics 和人工动作
+
+也就是说，这是公网 Worker，不是公网 operator 面板。
+
+### Request validation policy
+
+Worker ingress 现在固定遵循：
+
+```text
+parse request
+-> runtime validate
+-> authorize if needed
+-> call core path
+-> map response
+```
+
+关键语义：
+
+- 非法 JSON 返回 `400`
+- 结构不合法的 body 返回 `400`
+- path/query 在入口层做最小边界校验
+- 不把坏输入放进更深层再炸成 `500`
 
 ### Durable Object: mailbox coordinator
 
@@ -210,6 +274,28 @@ recovery 不是后期优化。
 - 修复 current signal projection
 - 通知 DO 恢复结果
 
+### Webhook ingress hardening
+
+Graph webhook 仍然是公网入口，但处理顺序已经收敛成：
+
+```text
+validationToken shortcut
+-> parse JSON
+-> validate payload shape
+-> reject empty batches
+-> resolve subscription
+-> verify clientState
+-> persist accepted batch only
+-> route to mailbox DO
+```
+
+几个关键约束：
+
+- `payload.value` 不能为空数组
+- 全部事件都被拒绝时，不写 blob
+- raw payload 只对“至少有一条 accepted 事件”的批次落库
+- mailbox 路由仍然由 subscription ownership 决定
+
 ### OAuth connect flow
 
 个人 Outlook/Hotmail 账号接入走一条独立的 delegated OAuth 闭环：
@@ -235,6 +321,15 @@ POST /api/mailboxes/:id/reauthorize
 
 `pending_auth` 只存在于账号层 `auth_status`，不进入 DO 生命周期。
 DO 继续只表达 mailbox 运行态，不表达“OAuth 进行中”。
+
+这里还有一个关键安全约束：
+
+- connect intent 只能由 operator 创建
+- connect mode 默认是通用授权发起，不预绑定邮箱身份
+- callback 只能消费已落库的 `state_nonce`
+- `redirectAfter` 只允许站内相对路径
+
+所以公开的是 Microsoft OAuth 回调闭环，不是一个开放跳板。
 
 ---
 
@@ -289,6 +384,7 @@ projection 更新必须遵守这些语义：
 | `cursor_generation` | DO 决定推进，PG 存 checkpoint |
 | mailbox OAuth connect intent | Postgres |
 | mailbox `auth_status` | Postgres |
+| operator auth boundary | Worker ingress |
 | `messages` | Postgres |
 | `message_rule_matches` | Postgres |
 | `hit_events` | Postgres |
@@ -301,8 +397,11 @@ projection 更新必须遵守这些语义：
 
 - DO 不是首页 read model owner
 - Postgres 不是 mailbox lifecycle owner
+- Worker ingress 是公网边界与 operator auth owner
 - projection 只有 parse 路径能写
 - facts、hits、projection 必须同事务提交
+- 公开 OAuth/webhook 路由不能顺带暴露 operator 数据面
+- `redirectAfter` 不能离开站内路径空间
 
 ---
 
@@ -345,6 +444,11 @@ OTP 首页的状态不是纯前端文案层判断。
 - `delivery_path_unhealthy` 代表 mailbox 生命周期或投递链路存在异常
 - `empty` 代表系统尚无可展示历史
 
+补一个前提：
+
+- OTP 首页是 operator 页面，不是匿名公开页面
+- 所以这些状态语义建立在已通过 Basic Auth 的前提下
+
 ---
 
 ## 10. 架构成功标准
@@ -358,3 +462,5 @@ OTP 首页的状态不是纯前端文案层判断。
 3. recovery 能修复遗漏数据，但不能错误回滚当前 signal
 4. mailbox lifecycle ownership、facts ownership、blob ownership 始终清晰
 5. 首页主流程始终服务 `看到最新 code -> 复制`
+6. 公网边界清晰，OAuth/webhook 公开，operator 面受保护
+7. 坏输入在入口层被稳定收敛为 `400`

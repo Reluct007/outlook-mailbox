@@ -58,3 +58,30 @@ Build the first OTP-panel read path on top of the existing Phase 0 storage, whil
 - late or duplicate events do not regress current signal
 - waiting and unhealthy states are distinguishable
 - tests cover projection overwrite and rollback semantics
+
+## Deferred from /autoplan: Outlook OAuth launcher control surface
+
+Status: pending
+Priority: after the v0 launcher ships
+
+### Deferred items
+
+1. Operator create-intent abuse control
+   - rate limit
+   - audit trail
+   - per-operator traceability
+
+2. Connect intent retention
+   - cleanup job for expired / superseded intents
+   - retention window and storage cap
+
+3. Lightweight recent intent history
+   - keep v0 page action-first
+   - add recent records only after single-current-intent flow is stable
+
+4. Error glossary and troubleshooting docs
+   - map machine code -> problem / cause / fix / docsUrl
+
+5. Batch-scale operational surface
+   - not in v0
+   - revisit only after 20-mailbox dogfood proves the single-mailbox control surface

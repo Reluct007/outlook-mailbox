@@ -1,107 +1,104 @@
 # outlook-mailbox
 
-Cloudflare-native Phase 0 skeleton for the Outlook mailbox hit-stream experiment.
+Experimental Cloudflare-native OTP aggregation panel for multiple Outlook mailboxes.
 
-## Current implementation
+This project is optimized for one narrow workflow:
 
-- Worker ingress
-  - `POST /api/mailboxes/connect-intents`
-  - `POST /api/mailboxes/:id/reauthorize`
-  - `GET /oauth/outlook/start`
-  - `GET /oauth/outlook/callback`
-  - `GET /connect/result`
-  - `POST /api/webhooks/outlook`
-  - `GET /api/hits`
-  - `GET /api/messages/:id`
-  - `GET /api/mailboxes/:id`
-  - `POST /api/mailboxes/:id/recovery`
-- Durable Object mailbox coordinator
-  - lifecycle state owner
-  - version gate
-  - dedupe window
-  - recovery / renew coordination
-- Queue jobs
-  - `mail.fetch`
-  - `mail.parse`
-  - `mail.recover`
-  - `subscription.renew`
-- Postgres facts repository
-  - `memory` and `postgres` storage modes
-  - file-based SQL migration entrypoint
-- Mailbox-scoped Graph auth path
-  - credential source of truth lives in `mailbox_credentials`
-  - real mode refreshes delegated tokens via OAuth refresh token flow
-  - real mode subscription / fetch / delta calls use mailbox tokens, not a global Graph token
-- R2/blob split with graceful fallback
-- Minimal parser
-  - verification code
-  - reward
-  - cashback
-  - redeem
+> get the latest verification code fast, copy it, and leave
 
-## Storage modes
+It is not a general-purpose email client.
 
-### `memory`
+## Status
 
-Use `memory` when you explicitly want Phase 0 local validation mode:
+- experimental and self-host oriented
+- current runtime target: Cloudflare Workers + Durable Objects + Queues + R2 + Postgres
+- public ingress is intentionally narrow
+- operator and read surfaces are intentionally protected
 
-- `PHASE0_STORAGE_MODE=memory`
-- `PHASE0_GRAPH_MODE=mock`
-- `PHASE0_AUTH_MODE=mock`
+If you are evaluating whether this should be public yet, the answer is yes for source visibility and contribution, but you should still treat the runtime as an operator tool rather than a polished SaaS product.
 
-That means:
+## What It Does
 
-- facts are stored in memory for local/test runs
-- Graph calls are mocked
-- auth refresh is mocked
+- receives Outlook mailbox events through Microsoft Graph webhook callbacks
+- coordinates mailbox lifecycle in a Durable Object
+- stores facts and query models in Postgres
+- stores larger message blobs in R2
+- extracts OTP-oriented signals from mail content
+- exposes a protected OTP/operator surface instead of a public dashboard
 
-Use `memory` when you want:
+Primary signal:
 
-- the lightest local validation loop
-- mock Graph/auth behavior
-- no Postgres dependency for quick tests
+- `verification_code`
 
-### `postgres`
+Secondary signals:
 
-`PHASE0_STORAGE_MODE=postgres` is the convergence target and the default runtime path in `wrangler.toml`.
+- `reward`
+- `cashback`
+- `redeem`
 
-Facts are stored in Postgres, while:
+## What It Does Not Do
 
-- Durable Objects remain the only mailbox lifecycle coordinator
-- R2 continues to hold blob content
-- repository callers keep the same API surface
-- mailbox credentials persist in `mailbox_credentials`
+- full mailbox management
+- send mail
+- anonymous public OTP viewing
+- app-only Graph token mode as a first-class production path
 
-Postgres connection config is canonicalized to a single `connectionString` shape:
+## Architecture At A Glance
 
-1. preferred: `PHASE0_POSTGRES_URL`
-2. runtime alternative: `HYPERDRIVE.connectionString` via a Hyperdrive binding named `HYPERDRIVE`
+- public routes: Outlook OAuth callback and Graph webhook callback only
+- protected routes: OTP panel, mailbox diagnostics, message detail, connect launcher, reauthorize, recovery
+- lifecycle authority: Durable Object
+- storage of record: Postgres
+- blob storage: R2
+- mailbox auth model: delegated mailbox OAuth refresh tokens
 
-Migration CLI uses environment variables, so it accepts:
+For deeper project context:
 
-1. `PHASE0_POSTGRES_URL`
-2. or `HYPERDRIVE_CONNECTION_STRING`
+- product framing: [`docs/PRODUCT.md`](./docs/PRODUCT.md)
+- implementation and runtime shape: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+- current design notes: [`DESIGN.md`](./DESIGN.md)
 
-## Migration
+## Quick Start
 
-Apply the schema with a single command:
+### 1. Install dependencies
 
 ```bash
-PHASE0_STORAGE_MODE=postgres \
-PHASE0_POSTGRES_URL="postgres://user:pass@host:5432/outlook_mailbox" \
-npm run migrate
+npm install
 ```
 
-Behavior:
+### 2. Create a local development config
 
-- creates `schema_migrations` if needed
-- applies `schema/*.sql` in filename order
-- skips already-applied versions
-- exits non-zero on failure
+Start from the example file:
 
-Runtime code never auto-creates tables or auto-runs migrations. `scripts/migrate.mjs` is the only schema change entrypoint.
+```bash
+cp .dev.vars.example .dev.vars
+```
 
-## Runtime config
+For the lightest local loop, replace its contents with:
+
+```bash
+PHASE0_STORAGE_MODE=memory
+PHASE0_GRAPH_MODE=mock
+PHASE0_AUTH_MODE=mock
+PHASE0_OPERATOR_PASSWORD=dev-password
+```
+
+### 3. Start the worker
+
+```bash
+npm run dev
+```
+
+### 4. Verify the protected OTP route
+
+```bash
+curl -u "operator:dev-password" \
+  "http://127.0.0.1:8787/api/otp-panel"
+```
+
+The worker requires `PHASE0_OPERATOR_PASSWORD` for protected routes even in local/mock mode.
+
+## Real Runtime Configuration
 
 The real runtime path needs all of the following:
 
@@ -118,71 +115,22 @@ OUTLOOK_OAUTH_AUTHORITY=consumers
 OUTLOOK_OAUTH_REDIRECT_URI=https://<public-worker-host>/oauth/outlook/callback
 OUTLOOK_OAUTH_SCOPES="offline_access openid profile email https://graph.microsoft.com/Mail.Read"
 OUTLOOK_CREDENTIAL_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
+PHASE0_OPERATOR_PASSWORD=<operator-basic-auth-password>
+# optional, defaults to operator
+# PHASE0_OPERATOR_USERNAME=operator
 ```
-
-Worker runtime with Hyperdrive:
-
-```toml
-compatibility_flags = ["nodejs_compat"]
-
-# [[hyperdrive]]
-# binding = "HYPERDRIVE"
-# id = "<your-hyperdrive-id>"
-```
-
-The worker normalizes Hyperdrive to the same internal `connectionString` contract. It does not maintain a separate repository config path.
-
-The production convergence target is now:
-
-- Postgres for facts
-- R2 for blobs
-- Durable Objects for mailbox coordination
-- delegated mailbox OAuth refresh for Graph access
 
 Notes:
 
-- `OUTLOOK_OAUTH_AUTHORITY` defaults to `consumers`, which matches the current personal Outlook/Hotmail mailbox focus.
-- `OUTLOOK_OAUTH_AUTHORIZE_URL` and `OUTLOOK_OAUTH_TOKEN_URL` are optional. If omitted, runtime derives the Microsoft endpoints from `OUTLOOK_OAUTH_AUTHORITY`.
-- `OUTLOOK_CREDENTIAL_ENCRYPTION_KEY` is required for any path that persists or reads mailbox credentials. It must be a base64-encoded 32-byte key for AES-GCM.
-- `OUTLOOK_WEBHOOK_NOTIFICATION_URL` is used for both `notificationUrl` and `lifecycleNotificationUrl`.
-- Real Graph mode no longer reads a global `OUTLOOK_GRAPH_ACCESS_TOKEN`. The worker reads and refreshes credentials per mailbox.
-- For local `wrangler dev`, put secrets in `.dev.vars` or export them in the shell before starting the worker.
+- `PHASE0_POSTGRES_URL` is the preferred Postgres config path
+- Hyperdrive can also be bound as `HYPERDRIVE`
+- `OUTLOOK_OAUTH_AUTHORIZE_URL` and `OUTLOOK_OAUTH_TOKEN_URL` are optional overrides
+- `OUTLOOK_CREDENTIAL_ENCRYPTION_KEY` is required anywhere mailbox credentials are persisted or read
+- `redirectAfter` is intentionally restricted to same-site relative paths
 
-## Mailbox onboarding
+## Migrations
 
-Public onboarding now goes through OAuth connect intents. Create an intent first:
-
-```bash
-curl -X POST "http://127.0.0.1:8787/api/mailboxes/connect-intents" \
-  -H "content-type: application/json" \
-  -d '{
-    "mailboxLabel": "ops-mailbox",
-    "redirectAfter": "/"
-  }'
-```
-
-Then open the returned `startUrl` in a browser, finish Microsoft login/consent, and let the callback route persist:
-
-- `mailbox_accounts`
-- `mailbox_credentials`
-- connect intent completion state
-- async mailbox onboard / subscription renew
-
-For an existing mailbox in `reauth_required`, use:
-
-```bash
-curl -X POST "http://127.0.0.1:8787/api/mailboxes/<mailbox-id>/reauthorize" \
-  -H "content-type: application/json" \
-  -d '{
-    "redirectAfter": "/"
-  }'
-```
-
-## Canary startup
-
-Start with 1-3 real mailboxes only.
-
-1. Apply schema:
+Apply schema files in `schema/` with:
 
 ```bash
 PHASE0_STORAGE_MODE=postgres \
@@ -190,72 +138,54 @@ PHASE0_POSTGRES_URL="postgres://user:pass@host:5432/outlook_mailbox" \
 npm run migrate
 ```
 
-2. Export real runtime config or create `.dev.vars` from `.dev.vars.example`, then start the worker:
+Behavior:
+
+- creates `schema_migrations` if needed
+- applies SQL files in filename order
+- skips versions that have already been applied
+- exits non-zero on failure
+
+Runtime code never auto-creates tables and never auto-runs migrations.
+
+## Common Commands
 
 ```bash
-npm run dev
-```
-
-3. Create a connect intent and open the `startUrl` in a browser:
-
-```bash
-curl -X POST "http://127.0.0.1:8787/api/mailboxes/connect-intents" \
-  -H "content-type: application/json" \
-  -d '{
-    "mailboxLabel": "ops-1",
-    "redirectAfter": "/"
-  }'
-```
-
-4. After callback lands, verify mailbox auth status, subscription + lifecycle state:
-
-```bash
-curl "http://127.0.0.1:8787/api/mailboxes/<mailbox-id>"
-curl "http://127.0.0.1:8787/api/otp-panel"
-```
-
-5. Send a real OTP mail through the mailbox and watch the same endpoints until the panel shows the latest code.
-
-## Canary observation points
-
-- `GET /api/mailboxes/:id`
-  - `mailbox.authStatus`
-  - `state.lifecycleState`
-  - `state.recentErrorSummary`
-  - `subscription.expirationDateTime`
-  - `cursor.deltaToken`
-- `GET /api/otp-panel`
-  - `status`
-  - `primarySignal`
-  - `mailboxes[].healthy`
-  - `mailboxes[].recentErrorSummary`
-- Facts/errors
-  - `reauth_required`
-  - `delivery_path_unhealthy`
-  - renew failures
-  - recovery triggers
-
-## Known risks
-
-- The current real path assumes delegated mailbox tokens. App-only token mode is still not implemented as a first-class model.
-- Queue backlog / latency metrics are still operator-visible only through mailbox state and logs. There is no dedicated metrics export yet.
-- Real webhook canary still depends on a publicly reachable `OUTLOOK_WEBHOOK_NOTIFICATION_URL`; local-only URLs will not work for Graph callbacks.
-- Mailbox credential refresh is persisted, but there is no separate operator UI for credential rotation history yet.
-- Credential storage inside `mailbox_credentials` is encrypted at the application layer with AES-GCM.
-
-## Commands
-
-```bash
-npm install
-npm run migrate
 npm run typecheck
 npm test
 npm run dev
+npm run migrate
+npm run deploy
 ```
 
-## Next production-hardening steps
+## Security Model
 
-1. add queue backlog and latency metrics export
-2. add integration/E2E runs against a real mailbox cohort
-3. add explicit operator surfacing for credential rotation history
-4. decide whether app-only token mode is needed, or stay mailbox-delegated only
+This repository handles mailbox credentials and OTP-adjacent data, so the runtime boundary matters:
+
+- operator surfaces require HTTP Basic auth
+- webhook ingestion validates payload shape, subscription ownership, and `clientState`
+- OAuth return targets are restricted to same-site relative paths
+- mailbox credentials are encrypted at the application layer before persistence
+
+See [`SECURITY.md`](./SECURITY.md) before testing against real accounts or opening a public issue about a vulnerability.
+
+## Contributing
+
+Contributions are welcome, but this is an intentionally opinionated codebase:
+
+- keep changes focused
+- prefer direct, readable solutions over compatibility layers
+- add or update tests when behavior changes
+- update docs when runtime config, routes, or storage contracts change
+
+Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a pull request.
+
+## Known Gaps
+
+- app-only Graph auth is not implemented as a first-class production path
+- there is no dedicated metrics export for queue backlog or latency
+- real webhook canary still requires a publicly reachable callback URL
+- the operator surface is functional, but still optimized for self-hosted use rather than multi-tenant distribution
+
+## License
+
+MIT. See [`LICENSE`](./LICENSE).
