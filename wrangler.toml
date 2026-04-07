@@ -1,13 +1,24 @@
 name = "outlook-mailbox"
 main = "src/index.ts"
 compatibility_date = "2026-04-07"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
 PHASE0_STORAGE_MODE = "memory"
+PHASE0_POSTGRES_URL = ""
 PHASE0_GRAPH_MODE = "mock"
 PHASE0_AUTH_MODE = "mock"
 PHASE0_DELAY_THRESHOLD_MS = "300000"
 PHASE0_DEDUPE_TTL_MS = "600000"
+
+# Runtime postgres config rules:
+# 1. Prefer PHASE0_POSTGRES_URL for direct connection-string setup
+# 2. Or bind Hyperdrive as HYPERDRIVE and let runtime normalize it to the same connectionString shape
+#
+# Example Hyperdrive binding:
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "<your-hyperdrive-id>"
 
 [[durable_objects.bindings]]
 name = "MAILBOX_COORDINATOR"

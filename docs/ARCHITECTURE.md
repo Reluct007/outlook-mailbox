@@ -2,19 +2,27 @@
 
 ## 1. 产品定位
 
-本项目不是通用邮箱客户端。
+本项目不是通用邮箱客户端，也不是泛化邮件命中流后台。
 
-它是一个面向大规模 Outlook 邮箱资源的 **实时邮件信号系统**。
+当前 V1 的产品定义是：
 
-当前 V1 只解决一个更窄、更值钱的问题：
+> 一个跨多个 Outlook mailbox 聚合的 OTP 面板
 
-> 哪些 Outlook Inbox 新邮件，已经足够值得我现在处理？
+它只服务一个首页主任务：
 
-这意味着：
+> 打开  
+> 看到最新 code  
+> 复制  
+> 离开
 
-- 先证明 Cloudflare-native 路径可行
-- 先打穿最小可靠信号链路
-- 先做命中工作台，不做完整后台
+所以架构目标也不是“把所有邮件信号都做成后台”。
+
+而是先稳定支撑：
+
+- 真实 Outlook 链路
+- 正确的验证码识别
+- 跨 mailbox 聚合后的 latest-code-first read model
+- 清晰区分 waiting 与 unhealthy 的首页状态
 
 ---
 
@@ -23,15 +31,17 @@
 ### V1 要做的
 
 - Outlook Inbox 新邮件接入
-- mailbox state coordination
+- mailbox lifecycle coordination
 - 规则驱动的信号提取
-- 命中事件生成
-- 命中工作台
+- facts、hit events 与 current signal projection 的持久化
+- OTP 首页专用 read API
 - mailbox health 摘要
 - recovery 正确性
 
 ### V1 不做的
 
+- 完整邮箱客户端
+- 全量命中流作为首页主入口
 - workspace / 多工作区产品心智
 - 完整邮箱池控制台
 - 完整独立搜索中心
@@ -39,73 +49,15 @@
 - 重规则管理 UI
 - 系统/API 一级页面
 
-这些不是永远不做，而是 **V1 明确后置**。
+这些不是永远不做，而是 V1 明确后置。
 
 ---
 
-## 3. 架构前提
+## 3. 核心架构判断
 
-在正式实现前，必须先完成 **Cloudflare-native Phase 0**。
+### 3.1 mailbox 是一级状态机单元
 
-原因很简单：
-
-这个系统最大的风险不是 CRUD，不是语言，不是“用不用 Go”。
-
-最大的风险是：
-
-- mailbox lifecycle state 能不能被稳定协调
-- webhook / lifecycle / renew / recovery 乱序下 version gate 能不能成立
-- queue backlog 会不会让系统看起来可用、实际上对运营无用
-- token churn / reauth 是否可控
-- body 存储是否会把 PostgreSQL 拖死
-
-所以这份架构不是“直接进入实现”的架构。
-
-它是：
-
-> 先验证 Cloudflare 运行边界，再进入实现的架构。
-
----
-
-## 4. 架构主线
-
-### 最小可靠链路
-
-```text
-mailbox onboarding
--> ensure Inbox subscription
--> webhook ingress
--> mailbox coordinator
--> fetch message details
--> evaluate rules
--> create hit events
--> query hit feed
-```
-
-这是 V1 唯一必须先打穿的链路。
-
-### 补偿链路
-
-```text
-missed notification / stale lifecycle / delayed mailbox
--> mark mailbox recovery needed
--> run delta query
--> fetch missed messages
--> re-run rules
--> restore missing hit events
-```
-
-recovery 不是后期优化。
-
-它是 correctness 主链路的一部分。
-
----
-
-## 5. 核心架构判断
-
-### 5.1 mailbox 是一级状态机单元
-
-这个系统的真实复杂度不是“更多 worker”，而是：
+系统复杂度的核心不在 CRUD，而在：
 
 - subscription 生命周期
 - webhook / lifecycle / renew / recovery 乱序
@@ -113,9 +65,9 @@ recovery 不是后期优化。
 - cursor 推进与重建
 - 幂等
 
-因此 mailbox 必须是一级协调单元。
+因此 mailbox 必须继续作为一级协调单元。
 
-### 5.2 Durable Object 是唯一协调边界
+### 3.2 Durable Object 是唯一生命周期协调边界
 
 每个 mailbox 对应一个 Durable Object。
 
@@ -130,25 +82,61 @@ recovery 不是后期优化。
 
 任何 mailbox lifecycle state 变更都只能通过 DO 推进。
 
-### 5.3 Queue consumer 不拥有 mailbox lifecycle state
+### 3.3 Postgres 存事实与 projection，R2 存大对象
 
-Queue consumer 只负责：
-
-- 执行任务
-- 写业务事实
-- 返回结果
-
-如果任务结果需要改变 mailbox 状态，必须回到 DO 协调。
-
-### 5.4 PG 存事实，R2 存大对象
-
-- **Postgres**：事实、索引、查询模型、历史记录
+- **Postgres**：事实、索引、历史记录、当前 signal projection、OTP 首页查询模型
 - **R2**：`body_html`、raw payload、超大 message body、调试素材
 - **DO storage**：mailbox 当前协调状态、短期版本/epoch、去重窗口
 
+### 3.4 首页不能直接临时扫 facts 聚合
+
+OTP 首页的核心 read model 应该来自持久化 projection。
+
+不能把“最新验证码”建立在每次临时扫 facts / hits 的查询上。
+
+原因很直接：
+
+- 首页是主入口，不能把聚合逻辑散落到前端
+- waiting / unhealthy / latest-code-first 需要稳定、明确的语义
+- projection 更容易保证排序、覆盖规则与恢复语义一致
+
 ---
 
-## 6. 核心组件
+## 4. 主链路
+
+### 最小可靠链路
+
+```text
+mailbox onboarding
+-> ensure Inbox subscription
+-> webhook ingress
+-> mailbox coordinator
+-> fetch message details
+-> evaluate rules
+-> persist facts + hits + current signals
+-> query OTP panel read API
+```
+
+这是 V1 唯一必须先打穿的链路。
+
+### 补偿链路
+
+```text
+missed notification / stale lifecycle / delayed mailbox
+-> mark mailbox recovery needed
+-> run delta query
+-> fetch missed messages
+-> re-run rules
+-> repair facts + hits + current signals
+```
+
+recovery 不是后期优化。
+
+它是 correctness 主链路的一部分。
+
+---
+
+## 5. 核心组件
 
 ### Worker ingress
 
@@ -158,7 +146,8 @@ Queue consumer 只负责：
 - validationToken
 - clientState 校验
 - mailbox routing
-- query/read API
+- OTP 首页读接口
+- 其他查询 API
 
 不负责：
 
@@ -204,29 +193,63 @@ Queue consumer 只负责：
 #### parse
 
 - 规则匹配
-- `message_rule_matches`
-- `hit_events`
-- 命中原因与置信度
+- 生成 `message_rule_matches`
+- 生成 `hit_events`
+- 维护 `mailbox_current_signals`
+- 所有相关写入同事务提交
 
 #### recover
 
 - 跑 delta query
 - 回补遗漏 message
-- 处理 cursor reset path
+- 重新执行 parse
+- 修复 current signal projection
 - 通知 DO 恢复结果
-
-### Query read model
-
-负责：
-
-- hit feed
-- message detail
-- mailbox health summary
-- 最小筛选
 
 ---
 
-## 7. ownership
+## 6. Read Model
+
+### OTP 首页专用 read API
+
+首页必须走专用 read API。
+
+原因不是“多一个接口更优雅”。
+
+而是要把首页语义收窄成一个明确模型：
+
+- 当前是否有最新 OTP
+- 当前是否处于 waiting
+- 当前是否存在 delivery path unhealthy
+- 最新 OTP 来自哪个 mailbox
+- 最近几条 OTP 历史是什么
+- 当前有哪些非 OTP signal 作为次级信息
+
+前端不应通过拼接通用 `/api/hits` 或 message detail 自己推导首页。
+
+### Projection 结构
+
+当前锁定的方向是单表多 signal projection：
+
+- 表名建议：`mailbox_current_signals`
+- 唯一键：`mailbox_id + signal_type`
+
+这张表承担的是“每个 mailbox 当前最新 signal”的持久化结果。
+
+OTP 首页再在此基础上做跨 mailbox 聚合，并保持 OTP 优先。
+
+### 覆盖规则
+
+projection 更新必须遵守这些语义：
+
+- 新 signal 可以覆盖旧 signal
+- 迟到的旧事件不能覆盖更新 signal
+- duplicate replay 不应改变 current signal
+- recovery 可以修复缺失，但不能回滚到更旧的当前状态
+
+---
+
+## 7. Ownership
 
 | 数据/状态 | canonical owner |
 |---|---|
@@ -237,15 +260,23 @@ Queue consumer 只负责：
 | `messages` | Postgres |
 | `message_rule_matches` | Postgres |
 | `hit_events` | Postgres |
+| `mailbox_current_signals` | Postgres，且只能由 parse/reparse 路径写入 |
 | raw webhook payload | R2 |
 | `body_html` | R2 |
 | preview / excerpt / parsed fields | Postgres |
 
+### 关键约束
+
+- DO 不是首页 read model owner
+- Postgres 不是 mailbox lifecycle owner
+- projection 只有 parse 路径能写
+- facts、hits、projection 必须同事务提交
+
 ---
 
-## 8. versioned mailbox state
+## 8. Versioned Mailbox State
 
-必须定义：
+必须定义并坚持这些版本语义：
 
 - `subscription_version`
 - `recovery_generation`
@@ -258,241 +289,40 @@ Queue consumer 只负责：
 2. 旧 recovery job 不能覆盖新 generation
 3. cursor 不能倒退
 4. lifecycle 迟到事件必须能被拒绝
-5. queue replay 不得重复生成 hit
+5. 迟到 parse / recover 结果不能把 projection 回退到旧 signal
 
 ---
 
-## 9. mailbox lifecycle state taxonomy
+## 9. 首页状态来源
 
-最小状态集：
+OTP 首页的状态不是纯前端文案层判断。
 
-- `healthy`
-- `delayed`
-- `recovery_needed`
-- `recovering`
-- `reauth_required`
-- `disabled`
+它依赖后端 read model 的明确语义输出。
 
-### 状态流转
+至少要能稳定区分：
 
-```text
-healthy
-  -> delayed
-  -> recovery_needed
-  -> reauth_required
+- `ready`
+- `waiting_for_code`
+- `delivery_path_unhealthy`
+- `empty`
 
-recovery_needed
-  -> recovering
-  -> reauth_required
+其中：
 
-recovering
-  -> healthy
-  -> delayed
-  -> reauth_required
-
-reauth_required
-  -> healthy
-
-disabled
-  -> healthy   (only via operator action)
-```
+- `ready` 由最新 OTP projection 驱动
+- `waiting_for_code` 代表当前无新 OTP，但链路健康
+- `delivery_path_unhealthy` 代表 mailbox 生命周期或投递链路存在异常
+- `empty` 代表系统尚无可展示历史
 
 ---
 
-## 10. 主时序
+## 10. 架构成功标准
 
-### 实时链路
+架构成立的判断标准不是“接口更多”或“表更全”。
 
-```text
-1. Outlook Inbox 收到邮件
-2. Graph 推 webhook
-3. Worker ingress 校验并路由 mailbox DO
-4. DO 做 dedupe / version gate / state decision
-5. DO 发出 fetch job
-6. fetch consumer 拉 message 详情
-7. parse consumer 跑规则
-8. 生成 hit_events
-9. query API 提供命中工作台读取
-```
+而是：
 
-### recovery 链路
-
-```text
-1. stale lifecycle / drift / missed notification 触发 recovery_needed
-2. DO 发出 recover job
-3. recover consumer 读取 delta cursor
-4. delta query 拉增量
-5. 回补遗漏 messages
-6. 重跑规则
-7. 更新 cursor
-8. DO 决定恢复完成
-```
-
-### 一致性要求
-
-这里最重要的不是“能不能跑通”，而是：
-
-- webhook 与 delta 同时处理同一 message 时不重复
-- `messages` / `message_rule_matches` / `hit_events` 幂等
-- cursor 不倒退
-- stale lifecycle 不污染当前 mailbox 状态
-
----
-
-## 11. 查询模型
-
-### 命中工作台
-
-首页只读 `hit_events`。
-
-这是第一性路径。
-
-### 最小查询面
-
-V1 先支持：
-
-- hit feed
-- message detail
-- sender / recipient / keyword 的最小筛选
-- 异常摘要
-
-### detail 读取原则
-
-- preview-first
-- 按需读 R2
-- R2 缺失时 graceful fallback
-
-### 后置能力
-
-以下能力后置：
-
-- 完整独立搜索页
-- 更广泛的历史检索
-- 更复杂的全文能力
-- OpenSearch / Elasticsearch
-
-V1 直接用 PostgreSQL。
-
----
-
-## 12. 安全边界
-
-### webhook
-
-- validationToken 单独处理
-- clientState 校验
-- malformed payload 审计
-- replay / stale event 防护
-
-### 凭据
-
-- refresh token 加密存储
-- 凭据与 mailbox 主表分离
-- token refresh 由 DO 发起，auth helper 执行
-
-### 正文与 payload
-
-- raw payload 和 `body_html` 默认不进 PG 热路径
-- R2 retention / 访问策略必须定义
-
-### 内部 API
-
-- 命中流、detail、mailbox health 都要最小权限边界
-- mailbox state 手动操作要有 audit log
-
----
-
-## 13. 性能目标
-
-目标保持不变：
-
-- 支持 10000 个 Outlook 邮箱
-- 新邮件 10 秒内进入命中工作台
-
-但必须经过 Phase 0 实测确认，不是默认成立。
-
-### 必须观测的基线
-
-- queue backlog age
-- per-mailbox event rate
-- hit feed query p50/p95
-- detail with R2 fallback p50/p95
-- recovery completion latency
-- hot mailbox burst behavior
-
----
-
-## 14. 调度边界
-
-### Cron
-
-只做：
-
-- 周期扫描
-- 发现候选 mailbox
-- backlog / health 巡检
-
-### Workflows
-
-只做：
-
-- 长链路恢复编排候选
-- 需要可恢复步骤的 renew / reauth / recovery orchestration
-
-### 明确禁止
-
-- Cron 直接改 mailbox lifecycle state
-- Workflows 直接改 mailbox lifecycle state
-- 多个调度源并发推进同一个 mailbox 状态
-
----
-
-## 15. V1 架构决策摘要
-
-### 决策 1
-
-先做 **Cloudflare-native Phase 0**，再进入正式实现。
-
-### 决策 2
-
-使用 Graph webhook 作为实时入口。
-
-### 决策 3
-
-使用 Inbox delta query 作为补偿链路。
-
-### 决策 4
-
-recovery 属于 correctness 主链路，不是后期增强。
-
-### 决策 5
-
-DO 是 mailbox lifecycle state 的唯一协调边界。
-
-### 决策 6
-
-Queue consumer 不直接改 mailbox lifecycle state。
-
-### 决策 7
-
-SSE、完整搜索页、完整邮箱池页、workspace 后置。
-
----
-
-## 16. 最后的边界定义
-
-这个系统现在不是在做：
-
-- Outlook 替代品
-- 多租户邮件平台
-- 完整后台运维系统
-- Cloudflare 化的 Go 多 worker 翻版
-
-它现在只在做：
-
-> Outlook Inbox 新邮件接入  
-> -> mailbox state coordination  
-> -> 规则命中  
-> -> 可处理信号事件
-
-这就是收窄后的 V1 架构边界。
+1. parse 路径可以稳定地产生 facts、hits 与 current signal projection
+2. OTP 首页不依赖临时扫描 facts 也能返回 latest-code-first 结果
+3. recovery 能修复遗漏数据，但不能错误回滚当前 signal
+4. mailbox lifecycle ownership、facts ownership、blob ownership 始终清晰
+5. 首页主流程始终服务 `看到最新 code -> 复制`

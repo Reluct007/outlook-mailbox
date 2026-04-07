@@ -2,7 +2,9 @@ import { OutlookAuthHelper } from "./lib/auth-helper";
 import { createBlobStore } from "./lib/blob-store";
 import { createFactsRepository } from "./lib/facts-repository";
 import { OutlookGraphClient } from "./lib/graph-client";
-import { badRequest, json, methodNotAllowed, notFound, readJson, text } from "./lib/http";
+import { badRequest, html, json, methodNotAllowed, notFound, readJson, text } from "./lib/http";
+import { buildOtpPanelResponse } from "./lib/otp-panel";
+import { renderOtpPanelPage } from "./lib/otp-panel-page";
 import { parseMessageRules } from "./lib/parser";
 import { createMailParseJob } from "./lib/queue-contracts";
 import type {
@@ -143,6 +145,10 @@ export async function handleRequest(
   const url = new URL(request.url);
   const repository = createFactsRepository(env);
   const blobStore = createBlobStore(env);
+
+  if ((url.pathname === "/" || url.pathname === "/index.html") && request.method === "GET") {
+    return html(renderOtpPanelPage());
+  }
 
   if (url.pathname === "/api/webhooks/outlook") {
     if (url.searchParams.has("validationToken")) {
@@ -323,6 +329,40 @@ export async function handleRequest(
     return json({ hits });
   }
 
+  if (url.pathname === "/api/otp-panel") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+
+    const mailboxes = await repository.listMailboxAccounts();
+    const [currentSignals, recentSignalHistory, mailboxSnapshots] = await Promise.all([
+      repository.listCurrentSignals({
+        limit: 200,
+      }),
+      repository.listSignalHistory({
+        signalType: "verification_code",
+        limit: 10,
+      }),
+      Promise.all(
+        mailboxes.map(async (mailbox) => ({
+          mailboxId: mailbox.mailboxId,
+          snapshot: await fetchMailboxSnapshot(env, mailbox.mailboxId),
+        })),
+      ),
+    ]);
+
+    return json(
+      buildOtpPanelResponse({
+        mailboxes,
+        snapshotsByMailboxId: new Map(
+          mailboxSnapshots.map((item) => [item.mailboxId, item.snapshot]),
+        ),
+        currentSignals,
+        recentSignalHistory,
+      }),
+    );
+  }
+
   const messageMatch = url.pathname.match(/^\/api\/messages\/([^/]+)$/);
   if (messageMatch) {
     if (request.method !== "GET") {
@@ -483,8 +523,7 @@ async function handleParseJob(job: MailParseJob, env: Phase0Env): Promise<void> 
     bodyHtml,
   });
 
-  await repository.saveRuleMatches(parsed.matches);
-  await repository.saveHitEvents(parsed.hits);
+  await repository.saveParseArtifacts(parsed);
 }
 
 async function handleRecoverJob(job: MailRecoverJob, env: Phase0Env): Promise<void> {

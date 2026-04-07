@@ -120,6 +120,19 @@ export interface HitEventFact {
   createdAt: string;
 }
 
+export interface MailboxCurrentSignalFact {
+  mailboxId: string;
+  signalType: RuleMatchKind;
+  messageId: string;
+  ruleMatchId: string;
+  hitId: string;
+  matchedText: string;
+  confidence: MatchConfidence;
+  messageReceivedAt: string;
+  signalCreatedAt: string;
+  updatedAt: string;
+}
+
 export interface MailboxErrorFact {
   id: string;
   mailboxId: string;
@@ -152,6 +165,90 @@ export interface MailboxSummaryView {
   subscription: MailboxSubscriptionFact | null;
   cursor: MailboxCursorFact | null;
   aggregates: MailboxAggregates;
+}
+
+export interface SaveParseArtifactsInput {
+  matches: MessageRuleMatchFact[];
+  hits: HitEventFact[];
+}
+
+export interface SaveParseArtifactsResult {
+  matches: MessageRuleMatchFact[];
+  hits: HitEventFact[];
+  currentSignals: MailboxCurrentSignalFact[];
+}
+
+export interface CurrentSignalsQuery {
+  mailboxId?: string;
+  signalType?: RuleMatchKind;
+  limit?: number;
+}
+
+export interface SignalHistoryQuery {
+  mailboxId?: string;
+  signalType?: RuleMatchKind;
+  limit?: number;
+}
+
+export interface SignalHistoryEntry {
+  mailboxId: string;
+  messageId: string;
+  ruleMatchId: string;
+  hitId: string;
+  signalType: RuleMatchKind;
+  matchedText: string;
+  confidence: MatchConfidence;
+  messageReceivedAt: string;
+  signalCreatedAt: string;
+}
+
+export type OtpPanelStatus =
+  | "ready"
+  | "waiting_for_code"
+  | "delivery_path_unhealthy"
+  | "empty";
+
+export interface OtpPanelSignalView {
+  mailboxId: string;
+  mailboxEmailAddress: string | null;
+  messageId: string;
+  hitId: string;
+  signalType: RuleMatchKind;
+  value: string;
+  confidence: MatchConfidence;
+  receivedAt: string;
+  createdAt: string;
+}
+
+export interface OtpPanelPrimarySignalView extends OtpPanelSignalView {
+  acrossMailboxCount: number;
+}
+
+export interface OtpPanelMailboxStateView {
+  mailboxId: string;
+  emailAddress: string;
+  lifecycleState: MailboxLifecycleState | null;
+  healthy: boolean;
+  snapshotMissing: boolean;
+  delayedSince: string | null;
+  recentErrorSummary: string | null;
+}
+
+export interface OtpPanelSummary {
+  mailboxCount: number;
+  healthyMailboxCount: number;
+  unhealthyMailboxCount: number;
+  currentVerificationCodeCount: number;
+}
+
+export interface OtpPanelResponse {
+  status: OtpPanelStatus;
+  primarySignal: OtpPanelPrimarySignalView | null;
+  recentCodes: OtpPanelSignalView[];
+  secondarySignals: OtpPanelSignalView[];
+  mailboxes: OtpPanelMailboxStateView[];
+  summary: OtpPanelSummary;
+  generatedAt: string;
 }
 
 export interface OutlookWebhookPayload {
@@ -272,6 +369,12 @@ export interface RefreshTokenResult {
   error: string | null;
 }
 
+export type Phase0StorageMode = "memory" | "postgres";
+
+export interface HyperdriveBinding {
+  connectionString?: string;
+}
+
 export interface Phase0Env {
   MAILBOX_COORDINATOR: DurableObjectNamespace;
   MAIL_FETCH_QUEUE: Queue<MailFetchJob>;
@@ -279,7 +382,9 @@ export interface Phase0Env {
   MAIL_RECOVER_QUEUE: Queue<MailRecoverJob>;
   SUBSCRIPTION_RENEW_QUEUE: Queue<SubscriptionRenewJob>;
   MESSAGE_BLOB_BUCKET?: R2Bucket;
-  PHASE0_STORAGE_MODE?: string;
+  PHASE0_STORAGE_MODE?: Phase0StorageMode;
+  PHASE0_POSTGRES_URL?: string;
+  HYPERDRIVE?: HyperdriveBinding;
   PHASE0_GRAPH_MODE?: string;
   PHASE0_AUTH_MODE?: string;
   PHASE0_DELAY_THRESHOLD_MS?: string;

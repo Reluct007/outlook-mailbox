@@ -22,6 +22,18 @@ export function text(body: string, init: ResponseInit = {}): Response {
   });
 }
 
+export function html(body: string, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  if (!headers.has("content-type")) {
+    headers.set("content-type", "text/html; charset=utf-8");
+  }
+
+  return new Response(body, {
+    ...init,
+    headers,
+  });
+}
+
 export async function readJson<T>(request: Request): Promise<T> {
   return (await request.json()) as T;
 }
