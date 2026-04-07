@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDb } from "pg-mem";
 import type { PostgresClientConstructor, PostgresClientLike } from "../../src/lib/postgres/client";
@@ -39,8 +40,18 @@ export async function withClient<TResult>(
 }
 
 export async function readPhase0SchemaSql(): Promise<string> {
-  const schemaUrl = new URL("../../schema/0001_phase0.sql", import.meta.url);
-  return readFile(fileURLToPath(schemaUrl), "utf8");
+  const schemaDir = fileURLToPath(new URL("../../schema", import.meta.url));
+  const entries = await readdir(schemaDir, { withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+
+  const sqlParts = await Promise.all(
+    files.map((fileName) => readFile(path.join(schemaDir, fileName), "utf8")),
+  );
+
+  return sqlParts.join("\n\n");
 }
 
 export async function applyPhase0Schema(context: PgMemContext): Promise<void> {

@@ -1,11 +1,16 @@
+import { Buffer } from "node:buffer";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createCredentialCrypto } from "../src/lib/credential-crypto";
 import { createPostgresFactsRepository } from "../src/lib/postgres/repository";
 import { parseMessageRules } from "../src/lib/parser";
 import type { MessageFact, Phase0Env } from "../src/lib/types";
 import {
   applyPhase0Schema,
   createPgMemContext,
+  withClient,
 } from "./helpers/pg-test-utils";
+
+const TEST_CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
 
 function createEnv(overrides: Partial<Phase0Env> = {}): Phase0Env {
   return {
@@ -60,6 +65,10 @@ describe("postgres facts repository", () => {
       },
       {
         ClientCtor: context.ClientCtor,
+        credentialCrypto: createCredentialCrypto({
+          OUTLOOK_CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+          PHASE0_AUTH_MODE: "real",
+        }),
       },
     );
 
@@ -85,6 +94,80 @@ describe("postgres facts repository", () => {
       accessToken: "access-token-1",
       refreshToken: "refresh-token-2",
       tokenExpiresAt: "2026-04-08T00:00:00.000Z",
+    });
+
+    await withClient(context, async (client) => {
+      const rawResult = await client.query<{
+        access_token: string | null;
+        refresh_token: string | null;
+      }>(
+        `SELECT access_token, refresh_token FROM mailbox_credentials WHERE mailbox_id = 'mailbox-1'`,
+      );
+      expect(rawResult.rows[0]?.access_token).not.toBe("access-token-1");
+      expect(rawResult.rows[0]?.refresh_token).not.toBe("refresh-token-2");
+      expect(rawResult.rows[0]?.refresh_token).toMatch(/^enc:v1:/);
+    });
+  });
+
+  it("可以创建并完成 connect intent，同时回写 mailbox auth status", async () => {
+    const context = createPgMemContext();
+    await applyPhase0Schema(context);
+    const repository = createPostgresFactsRepository(
+      {
+        connectionString: context.connectionString,
+        source: "env",
+      },
+      {
+        ClientCtor: context.ClientCtor,
+        credentialCrypto: createCredentialCrypto({
+          OUTLOOK_CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+          PHASE0_AUTH_MODE: "real",
+        }),
+      },
+    );
+
+    const intent = await repository.createConnectIntent({
+      mode: "connect",
+      mailboxLabel: "ops-mailbox",
+      redirectAfter: "/done",
+      expiresAt: "2026-04-08T00:00:00.000Z",
+      stateNonce: "state-1",
+      pkceCodeVerifier: "verifier-1",
+    });
+
+    expect(
+      await repository.getConnectIntentByStateNonce("state-1"),
+    ).toMatchObject({
+      id: intent.id,
+      status: "pending",
+      mailboxLabel: "ops-mailbox",
+    });
+
+    await repository.upsertMailboxAccount({
+      mailboxId: "provider-1",
+      emailAddress: "ops@example.com",
+      graphUserId: "provider-1",
+      providerAccountId: "provider-1",
+      authStatus: "pending_auth",
+    });
+
+    const completed = await repository.completeConnectIntent({
+      intentId: intent.id,
+      targetMailboxId: "provider-1",
+    });
+    const updatedMailbox = await repository.updateMailboxAuthStatus(
+      "provider-1",
+      "active",
+    );
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      targetMailboxId: "provider-1",
+    });
+    expect(updatedMailbox).toMatchObject({
+      mailboxId: "provider-1",
+      providerAccountId: "provider-1",
+      authStatus: "active",
     });
   });
 

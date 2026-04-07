@@ -1,10 +1,13 @@
 import type { FactsRepository } from "../facts-repository";
+import type { CredentialCrypto } from "../credential-crypto";
 import type {
+  ConnectIntent,
   CurrentSignalsQuery,
   HitEventFact,
   ListHitsQuery,
   MailboxAccountFact,
   MailboxAggregates,
+  MailboxAuthStatus,
   MailboxCredentialFact,
   MailboxCurrentSignalFact,
   MailboxCursorFact,
@@ -13,13 +16,18 @@ import type {
   MessageDetailView,
   MessageFact,
   MessageRuleMatchFact,
-  OnboardMailboxRequest,
   SaveParseArtifactsInput,
   SaveParseArtifactsResult,
   SignalHistoryEntry,
   SignalHistoryQuery,
+  UpsertMailboxAccountInput,
 } from "../types";
 import {
+  COMPLETE_CONNECT_INTENT_SQL,
+  EXPIRE_CONNECT_INTENT_SQL,
+  FAIL_CONNECT_INTENT_SQL,
+  GET_CONNECT_INTENT_BY_ID_SQL,
+  GET_CONNECT_INTENT_BY_STATE_NONCE_SQL,
   GET_CURRENT_SIGNAL_SQL,
   GET_HIT_EVENT_BY_DEDUPE_KEY_SQL,
   GET_MAILBOX_ACCOUNT_SQL,
@@ -31,10 +39,12 @@ import {
   GET_MESSAGE_DETAIL_RULE_MATCHES_SQL,
   GET_MESSAGE_SQL,
   INSERT_HIT_EVENT_SQL,
+  INSERT_CONNECT_INTENT_SQL,
   INSERT_MAILBOX_ERROR_SQL,
   LIST_MAILBOX_ACCOUNTS_SQL,
   LIST_RULE_MATCHES_BY_MESSAGE_SQL,
   RESOLVE_MAILBOX_BY_SUBSCRIPTION_ID_SQL,
+  UPDATE_MAILBOX_AUTH_STATUS_SQL,
   UPSERT_CURRENT_SIGNAL_SQL,
   UPSERT_MAILBOX_ACCOUNT_SQL,
   UPSERT_MAILBOX_CREDENTIAL_SQL,
@@ -57,6 +67,7 @@ import type { PostgresConnectionConfig } from "./config";
 interface CreatePostgresFactsRepositoryOptions {
   driver?: PostgresDriver;
   ClientCtor?: PostgresClientConstructor;
+  credentialCrypto?: CredentialCrypto | null;
 }
 
 type TimestampValue =
@@ -71,6 +82,24 @@ interface MailboxAccountRow {
   mailbox_id: string;
   email_address: string;
   graph_user_id: string;
+  provider_account_id: string | null;
+  auth_status: MailboxAuthStatus;
+  created_at: TimestampValue;
+  updated_at: TimestampValue;
+}
+
+interface ConnectIntentRow {
+  id: string;
+  status: ConnectIntent["status"];
+  mode: ConnectIntent["mode"];
+  mailbox_label: string | null;
+  target_mailbox_id: string | null;
+  state_nonce: string;
+  pkce_code_verifier: string;
+  redirect_after: string | null;
+  expires_at: TimestampValue;
+  completed_at: TimestampValue;
+  failure_reason: string | null;
   created_at: TimestampValue;
   updated_at: TimestampValue;
 }
@@ -242,6 +271,26 @@ function mapMailboxAccount(row: MailboxAccountRow): MailboxAccountFact {
     mailboxId: row.mailbox_id,
     emailAddress: row.email_address,
     graphUserId: row.graph_user_id,
+    providerAccountId: row.provider_account_id,
+    authStatus: row.auth_status,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
+  };
+}
+
+function mapConnectIntent(row: ConnectIntentRow): ConnectIntent {
+  return {
+    id: row.id,
+    status: row.status,
+    mode: row.mode,
+    mailboxLabel: row.mailbox_label,
+    targetMailboxId: row.target_mailbox_id,
+    stateNonce: row.state_nonce,
+    pkceCodeVerifier: row.pkce_code_verifier,
+    redirectAfter: row.redirect_after,
+    expiresAt: toIsoString(row.expires_at),
+    completedAt: toOptionalIsoString(row.completed_at),
+    failureReason: row.failure_reason,
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   };
@@ -398,10 +447,129 @@ async function resolveHit(
 }
 
 export class PostgresFactsRepository implements FactsRepository {
-  constructor(private readonly driver: PostgresDriver) {}
+  constructor(
+    private readonly driver: PostgresDriver,
+    private readonly credentialCrypto: CredentialCrypto | null,
+  ) {}
+
+  private async encryptCredentialValue(value: string | undefined): Promise<string | null | undefined> {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!this.credentialCrypto) {
+      throw new Error("credential_encryption_key_missing");
+    }
+
+    return this.credentialCrypto.encrypt(value);
+  }
+
+  private async decryptCredentialValue(value: string | null): Promise<string | null> {
+    if (value === null) {
+      return null;
+    }
+    if (!this.credentialCrypto) {
+      throw new Error("credential_encryption_key_missing");
+    }
+
+    return this.credentialCrypto.decrypt(value);
+  }
+
+  async createConnectIntent(input: {
+    mode: ConnectIntent["mode"];
+    mailboxLabel?: string;
+    redirectAfter?: string;
+    targetMailboxId?: string | null;
+    expiresAt: string;
+    stateNonce: string;
+    pkceCodeVerifier: string;
+  }): Promise<ConnectIntent> {
+    const now = new Date().toISOString();
+    const result = await this.driver.query<ConnectIntentRow>(INSERT_CONNECT_INTENT_SQL, [
+      crypto.randomUUID(),
+      "pending",
+      input.mode,
+      input.mailboxLabel?.trim() || null,
+      input.targetMailboxId ?? null,
+      input.stateNonce,
+      input.pkceCodeVerifier,
+      input.redirectAfter?.trim() || null,
+      input.expiresAt,
+      now,
+      now,
+    ]);
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("connect_intent_insert_failed");
+    }
+
+    return mapConnectIntent(row);
+  }
+
+  async getConnectIntentById(intentId: string): Promise<ConnectIntent | null> {
+    const result = await this.driver.query<ConnectIntentRow>(GET_CONNECT_INTENT_BY_ID_SQL, [
+      intentId,
+    ]);
+    const row = result.rows[0];
+    return row ? mapConnectIntent(row) : null;
+  }
+
+  async getConnectIntentByStateNonce(stateNonce: string): Promise<ConnectIntent | null> {
+    const result = await this.driver.query<ConnectIntentRow>(
+      GET_CONNECT_INTENT_BY_STATE_NONCE_SQL,
+      [stateNonce],
+    );
+    const row = result.rows[0];
+    return row ? mapConnectIntent(row) : null;
+  }
+
+  async completeConnectIntent(input: {
+    intentId: string;
+    targetMailboxId: string;
+  }): Promise<ConnectIntent> {
+    const now = new Date().toISOString();
+    const result = await this.driver.query<ConnectIntentRow>(COMPLETE_CONNECT_INTENT_SQL, [
+      input.intentId,
+      input.targetMailboxId,
+      now,
+      now,
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`connect_intent_complete_failed:${input.intentId}`);
+    }
+
+    return mapConnectIntent(row);
+  }
+
+  async failConnectIntent(input: {
+    intentId: string;
+    failureReason: string;
+  }): Promise<ConnectIntent> {
+    const result = await this.driver.query<ConnectIntentRow>(FAIL_CONNECT_INTENT_SQL, [
+      input.intentId,
+      input.failureReason,
+      new Date().toISOString(),
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`connect_intent_fail_failed:${input.intentId}`);
+    }
+
+    return mapConnectIntent(row);
+  }
+
+  async expireConnectIntent(intentId: string): Promise<ConnectIntent | null> {
+    const result = await this.driver.query<ConnectIntentRow>(EXPIRE_CONNECT_INTENT_SQL, [
+      intentId,
+      new Date().toISOString(),
+    ]);
+    const row = result.rows[0];
+    return row ? mapConnectIntent(row) : null;
+  }
 
   async upsertMailboxAccount(
-    input: OnboardMailboxRequest,
+    input: UpsertMailboxAccountInput,
   ): Promise<MailboxAccountFact> {
     const now = new Date().toISOString();
     const result = await this.driver.query<MailboxAccountRow>(
@@ -410,6 +578,8 @@ export class PostgresFactsRepository implements FactsRepository {
         input.mailboxId,
         input.emailAddress,
         input.graphUserId ?? input.emailAddress,
+        input.providerAccountId ?? null,
+        input.authStatus ?? "active",
         now,
         now,
       ],
@@ -439,6 +609,19 @@ export class PostgresFactsRepository implements FactsRepository {
     return result.rows.map(mapMailboxAccount);
   }
 
+  async updateMailboxAuthStatus(
+    mailboxId: string,
+    authStatus: MailboxAuthStatus,
+  ): Promise<MailboxAccountFact | null> {
+    const result = await this.driver.query<MailboxAccountRow>(UPDATE_MAILBOX_AUTH_STATUS_SQL, [
+      mailboxId,
+      authStatus,
+      new Date().toISOString(),
+    ]);
+    const row = result.rows[0];
+    return row ? mapMailboxAccount(row) : null;
+  }
+
   async upsertMailboxCredential(input: {
     mailboxId: string;
     accessToken?: string;
@@ -446,12 +629,14 @@ export class PostgresFactsRepository implements FactsRepository {
     tokenExpiresAt?: string;
   }): Promise<MailboxCredentialFact> {
     const now = new Date().toISOString();
+    const encryptedAccessToken = await this.encryptCredentialValue(input.accessToken);
+    const encryptedRefreshToken = await this.encryptCredentialValue(input.refreshToken);
     const result = await this.driver.query<MailboxCredentialRow>(
       UPSERT_MAILBOX_CREDENTIAL_SQL,
       [
         input.mailboxId,
-        input.accessToken ?? null,
-        input.refreshToken ?? null,
+        encryptedAccessToken ?? null,
+        encryptedRefreshToken ?? null,
         input.tokenExpiresAt ?? null,
         now,
       ],
@@ -462,7 +647,12 @@ export class PostgresFactsRepository implements FactsRepository {
       throw new Error(`mailbox_credential_upsert_failed:${input.mailboxId}`);
     }
 
-    return mapMailboxCredential(row);
+    const mapped = mapMailboxCredential(row);
+    return {
+      ...mapped,
+      accessToken: await this.decryptCredentialValue(mapped.accessToken),
+      refreshToken: await this.decryptCredentialValue(mapped.refreshToken),
+    };
   }
 
   async getMailboxCredential(
@@ -473,7 +663,16 @@ export class PostgresFactsRepository implements FactsRepository {
       [mailboxId],
     );
     const row = result.rows[0];
-    return row ? mapMailboxCredential(row) : null;
+    if (!row) {
+      return null;
+    }
+
+    const mapped = mapMailboxCredential(row);
+    return {
+      ...mapped,
+      accessToken: await this.decryptCredentialValue(mapped.accessToken),
+      refreshToken: await this.decryptCredentialValue(mapped.refreshToken),
+    };
   }
 
   async upsertMailboxSubscription(input: {
@@ -771,5 +970,5 @@ export function createPostgresFactsRepository(
         : {},
     );
 
-  return new PostgresFactsRepository(driver);
+  return new PostgresFactsRepository(driver, options.credentialCrypto ?? null);
 }

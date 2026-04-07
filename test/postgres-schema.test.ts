@@ -5,7 +5,7 @@ import {
 } from "./helpers/pg-test-utils";
 
 describe("phase0 postgres schema", () => {
-  it("可以创建全部 10 张表", async () => {
+  it("可以创建全部 11 张表", async () => {
     const context = createPgMemContext();
     await applyPhase0Schema(context);
 
@@ -29,6 +29,7 @@ describe("phase0 postgres schema", () => {
         "mailbox_subscriptions",
         "message_rule_matches",
         "messages",
+        "oauth_connect_intents",
         "schema_migrations",
       ]);
     });

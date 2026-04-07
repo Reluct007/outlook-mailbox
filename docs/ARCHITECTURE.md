@@ -85,6 +85,7 @@
 ### 3.3 Postgres 存事实与 projection，R2 存大对象
 
 - **Postgres**：事实、索引、历史记录、当前 signal projection、OTP 首页查询模型
+- **Postgres** 里的 `mailbox_credentials` 由应用层加密后再持久化
 - **R2**：`body_html`、raw payload、超大 message body、调试素材
 - **DO storage**：mailbox 当前协调状态、短期版本/epoch、去重窗口
 
@@ -142,6 +143,9 @@ recovery 不是后期优化。
 
 负责：
 
+- OAuth connect intent 创建
+- Outlook OAuth callback
+- reauthorize 入口
 - Graph webhook ingress
 - validationToken
 - clientState 校验
@@ -206,6 +210,32 @@ recovery 不是后期优化。
 - 修复 current signal projection
 - 通知 DO 恢复结果
 
+### OAuth connect flow
+
+个人 Outlook/Hotmail 账号接入走一条独立的 delegated OAuth 闭环：
+
+```text
+POST /api/mailboxes/connect-intents
+-> GET /oauth/outlook/start
+-> Microsoft login / consent
+-> GET /oauth/outlook/callback
+-> Graph /me
+-> upsert mailbox + credential
+-> DO onboard
+-> async subscription.renew
+```
+
+对已进入 `reauth_required` 的 mailbox，走同一条链路，只是由：
+
+```text
+POST /api/mailboxes/:id/reauthorize
+```
+
+发起。
+
+`pending_auth` 只存在于账号层 `auth_status`，不进入 DO 生命周期。
+DO 继续只表达 mailbox 运行态，不表达“OAuth 进行中”。
+
 ---
 
 ## 6. Read Model
@@ -257,6 +287,8 @@ projection 更新必须遵守这些语义：
 | `subscription_version` | Durable Object，PG 保留快照 |
 | `recovery_generation` | Durable Object，PG 保留快照 |
 | `cursor_generation` | DO 决定推进，PG 存 checkpoint |
+| mailbox OAuth connect intent | Postgres |
+| mailbox `auth_status` | Postgres |
 | `messages` | Postgres |
 | `message_rule_matches` | Postgres |
 | `hit_events` | Postgres |

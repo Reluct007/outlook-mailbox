@@ -4,12 +4,22 @@ compatibility_date = "2026-04-07"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-PHASE0_STORAGE_MODE = "memory"
+PHASE0_STORAGE_MODE = "postgres"
 PHASE0_POSTGRES_URL = ""
-PHASE0_GRAPH_MODE = "mock"
-PHASE0_AUTH_MODE = "mock"
+PHASE0_GRAPH_MODE = "real"
+PHASE0_AUTH_MODE = "real"
 PHASE0_DELAY_THRESHOLD_MS = "300000"
 PHASE0_DEDUPE_TTL_MS = "600000"
+OUTLOOK_WEBHOOK_NOTIFICATION_URL = ""
+OUTLOOK_WEBHOOK_CLIENT_STATE = ""
+OUTLOOK_OAUTH_CLIENT_ID = ""
+OUTLOOK_OAUTH_CLIENT_SECRET = ""
+OUTLOOK_OAUTH_AUTHORITY = "consumers"
+OUTLOOK_OAUTH_REDIRECT_URI = ""
+OUTLOOK_OAUTH_AUTHORIZE_URL = ""
+OUTLOOK_OAUTH_TOKEN_URL = ""
+OUTLOOK_OAUTH_SCOPES = "offline_access openid profile email https://graph.microsoft.com/Mail.Read"
+OUTLOOK_CREDENTIAL_ENCRYPTION_KEY = ""
 
 # Runtime postgres config rules:
 # 1. Prefer PHASE0_POSTGRES_URL for direct connection-string setup

@@ -1,9 +1,11 @@
 import type {
+  ConnectIntent,
   CurrentSignalsQuery,
   HitEventFact,
   ListHitsQuery,
   MailboxAccountFact,
   MailboxAggregates,
+  MailboxAuthStatus,
   MailboxCredentialFact,
   MailboxCurrentSignalFact,
   MailboxCursorFact,
@@ -12,13 +14,17 @@ import type {
   MessageDetailView,
   MessageFact,
   MessageRuleMatchFact,
-  OnboardMailboxRequest,
   Phase0Env,
   SaveParseArtifactsInput,
   SaveParseArtifactsResult,
   SignalHistoryEntry,
   SignalHistoryQuery,
+  UpsertMailboxAccountInput,
 } from "./types";
+import {
+  createCredentialCrypto,
+  type CredentialCrypto,
+} from "./credential-crypto";
 import {
   resolvePhase0StorageMode,
   resolvePostgresConnectionConfig,
@@ -26,6 +32,8 @@ import {
 import { createPostgresFactsRepository } from "./postgres/repository";
 
 interface MemoryFactsStore {
+  connectIntents: Map<string, ConnectIntent>;
+  connectIntentIdsByStateNonce: Map<string, string>;
   mailboxes: Map<string, MailboxAccountFact>;
   credentials: Map<string, MailboxCredentialFact>;
   subscriptionsById: Map<string, MailboxSubscriptionFact>;
@@ -45,6 +53,8 @@ declare global {
 
 function getMemoryFactsStore(): MemoryFactsStore {
   globalThis.__phase0FactsStore ??= {
+    connectIntents: new Map(),
+    connectIntentIdsByStateNonce: new Map(),
     mailboxes: new Map(),
     credentials: new Map(),
     subscriptionsById: new Map(),
@@ -187,9 +197,33 @@ function validateParseArtifacts(input: SaveParseArtifactsInput): void {
 }
 
 export interface FactsRepository {
-  upsertMailboxAccount(input: OnboardMailboxRequest): Promise<MailboxAccountFact>;
+  createConnectIntent(input: {
+    mode: ConnectIntent["mode"];
+    mailboxLabel?: string;
+    redirectAfter?: string;
+    targetMailboxId?: string | null;
+    expiresAt: string;
+    stateNonce: string;
+    pkceCodeVerifier: string;
+  }): Promise<ConnectIntent>;
+  getConnectIntentById(intentId: string): Promise<ConnectIntent | null>;
+  getConnectIntentByStateNonce(stateNonce: string): Promise<ConnectIntent | null>;
+  completeConnectIntent(input: {
+    intentId: string;
+    targetMailboxId: string;
+  }): Promise<ConnectIntent>;
+  failConnectIntent(input: {
+    intentId: string;
+    failureReason: string;
+  }): Promise<ConnectIntent>;
+  expireConnectIntent(intentId: string): Promise<ConnectIntent | null>;
+  upsertMailboxAccount(input: UpsertMailboxAccountInput): Promise<MailboxAccountFact>;
   getMailboxAccount(mailboxId: string): Promise<MailboxAccountFact | null>;
   listMailboxAccounts(): Promise<MailboxAccountFact[]>;
+  updateMailboxAuthStatus(
+    mailboxId: string,
+    authStatus: MailboxAuthStatus,
+  ): Promise<MailboxAccountFact | null>;
   upsertMailboxCredential(input: {
     mailboxId: string;
     accessToken?: string;
@@ -228,8 +262,133 @@ export interface FactsRepository {
 }
 
 class MemoryFactsRepository implements FactsRepository {
+  constructor(private readonly credentialCrypto: CredentialCrypto | null) {}
+
+  private async encryptCredentialValue(value: string | undefined): Promise<string | null | undefined> {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null) {
+      return null;
+    }
+    if (!this.credentialCrypto) {
+      throw new Error("credential_encryption_key_missing");
+    }
+
+    return this.credentialCrypto.encrypt(value);
+  }
+
+  private async decryptCredentialValue(value: string | null): Promise<string | null> {
+    if (value === null) {
+      return null;
+    }
+    if (!this.credentialCrypto) {
+      throw new Error("credential_encryption_key_missing");
+    }
+
+    return this.credentialCrypto.decrypt(value);
+  }
+  async createConnectIntent(input: {
+    mode: ConnectIntent["mode"];
+    mailboxLabel?: string;
+    redirectAfter?: string;
+    targetMailboxId?: string | null;
+    expiresAt: string;
+    stateNonce: string;
+    pkceCodeVerifier: string;
+  }): Promise<ConnectIntent> {
+    const now = new Date().toISOString();
+    const intent: ConnectIntent = {
+      id: crypto.randomUUID(),
+      status: "pending",
+      mode: input.mode,
+      mailboxLabel: input.mailboxLabel?.trim() || null,
+      targetMailboxId: input.targetMailboxId ?? null,
+      stateNonce: input.stateNonce,
+      pkceCodeVerifier: input.pkceCodeVerifier,
+      redirectAfter: input.redirectAfter?.trim() || null,
+      expiresAt: input.expiresAt,
+      completedAt: null,
+      failureReason: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const store = getMemoryFactsStore();
+    store.connectIntents.set(intent.id, intent);
+    store.connectIntentIdsByStateNonce.set(intent.stateNonce, intent.id);
+    return intent;
+  }
+
+  async getConnectIntentById(intentId: string): Promise<ConnectIntent | null> {
+    return getMemoryFactsStore().connectIntents.get(intentId) ?? null;
+  }
+
+  async getConnectIntentByStateNonce(stateNonce: string): Promise<ConnectIntent | null> {
+    const intentId = getMemoryFactsStore().connectIntentIdsByStateNonce.get(stateNonce);
+    return intentId ? this.getConnectIntentById(intentId) : null;
+  }
+
+  async completeConnectIntent(input: {
+    intentId: string;
+    targetMailboxId: string;
+  }): Promise<ConnectIntent> {
+    const store = getMemoryFactsStore();
+    const existing = store.connectIntents.get(input.intentId);
+    if (!existing) {
+      throw new Error(`connect_intent_not_found:${input.intentId}`);
+    }
+
+    const nextValue: ConnectIntent = {
+      ...existing,
+      status: "completed",
+      targetMailboxId: input.targetMailboxId,
+      completedAt: new Date().toISOString(),
+      failureReason: null,
+      updatedAt: new Date().toISOString(),
+    };
+    store.connectIntents.set(existing.id, nextValue);
+    return nextValue;
+  }
+
+  async failConnectIntent(input: {
+    intentId: string;
+    failureReason: string;
+  }): Promise<ConnectIntent> {
+    const store = getMemoryFactsStore();
+    const existing = store.connectIntents.get(input.intentId);
+    if (!existing) {
+      throw new Error(`connect_intent_not_found:${input.intentId}`);
+    }
+
+    const nextValue: ConnectIntent = {
+      ...existing,
+      status: "failed",
+      failureReason: input.failureReason,
+      updatedAt: new Date().toISOString(),
+    };
+    store.connectIntents.set(existing.id, nextValue);
+    return nextValue;
+  }
+
+  async expireConnectIntent(intentId: string): Promise<ConnectIntent | null> {
+    const store = getMemoryFactsStore();
+    const existing = store.connectIntents.get(intentId);
+    if (!existing) {
+      return null;
+    }
+
+    const nextValue: ConnectIntent = {
+      ...existing,
+      status: "expired",
+      updatedAt: new Date().toISOString(),
+    };
+    store.connectIntents.set(existing.id, nextValue);
+    return nextValue;
+  }
+
   async upsertMailboxAccount(
-    input: OnboardMailboxRequest,
+    input: UpsertMailboxAccountInput,
   ): Promise<MailboxAccountFact> {
     const now = new Date().toISOString();
     const store = getMemoryFactsStore();
@@ -238,6 +397,8 @@ class MemoryFactsRepository implements FactsRepository {
       mailboxId: input.mailboxId,
       emailAddress: input.emailAddress,
       graphUserId: input.graphUserId ?? input.emailAddress,
+      providerAccountId: input.providerAccountId ?? existing?.providerAccountId ?? null,
+      authStatus: input.authStatus ?? existing?.authStatus ?? "active",
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -256,6 +417,24 @@ class MemoryFactsRepository implements FactsRepository {
     );
   }
 
+  async updateMailboxAuthStatus(
+    mailboxId: string,
+    authStatus: MailboxAuthStatus,
+  ): Promise<MailboxAccountFact | null> {
+    const existing = getMemoryFactsStore().mailboxes.get(mailboxId);
+    if (!existing) {
+      return null;
+    }
+
+    const nextValue: MailboxAccountFact = {
+      ...existing,
+      authStatus,
+      updatedAt: new Date().toISOString(),
+    };
+    getMemoryFactsStore().mailboxes.set(mailboxId, nextValue);
+    return nextValue;
+  }
+
   async upsertMailboxCredential(input: {
     mailboxId: string;
     accessToken?: string;
@@ -265,23 +444,44 @@ class MemoryFactsRepository implements FactsRepository {
     const store = getMemoryFactsStore();
     const existing = store.credentials.get(input.mailboxId);
     const now = new Date().toISOString();
+    const accessToken =
+      input.accessToken !== undefined
+        ? await this.encryptCredentialValue(input.accessToken)
+        : (existing?.accessToken ?? null);
+    const refreshToken =
+      input.refreshToken !== undefined
+        ? await this.encryptCredentialValue(input.refreshToken)
+        : (existing?.refreshToken ?? null);
     const nextValue: MailboxCredentialFact = {
       mailboxId: input.mailboxId,
       provider: "outlook",
-      accessToken: input.accessToken ?? existing?.accessToken ?? null,
-      refreshToken: input.refreshToken ?? existing?.refreshToken ?? null,
+      accessToken: accessToken ?? null,
+      refreshToken: refreshToken ?? null,
       tokenExpiresAt: input.tokenExpiresAt ?? existing?.tokenExpiresAt ?? null,
       updatedAt: now,
     };
 
     store.credentials.set(input.mailboxId, nextValue);
-    return nextValue;
+    return {
+      ...nextValue,
+      accessToken: await this.decryptCredentialValue(nextValue.accessToken),
+      refreshToken: await this.decryptCredentialValue(nextValue.refreshToken),
+    };
   }
 
   async getMailboxCredential(
     mailboxId: string,
   ): Promise<MailboxCredentialFact | null> {
-    return getMemoryFactsStore().credentials.get(mailboxId) ?? null;
+    const value = getMemoryFactsStore().credentials.get(mailboxId);
+    if (!value) {
+      return null;
+    }
+
+    return {
+      ...value,
+      accessToken: await this.decryptCredentialValue(value.accessToken),
+      refreshToken: await this.decryptCredentialValue(value.refreshToken),
+    };
   }
 
   async upsertMailboxSubscription(input: {
@@ -564,13 +764,16 @@ class MemoryFactsRepository implements FactsRepository {
 
 export function createFactsRepository(env: Phase0Env): FactsRepository {
   const mode = resolvePhase0StorageMode(env);
+  const credentialCrypto = createCredentialCrypto(env);
 
   if (mode === "postgres") {
-    return createPostgresFactsRepository(resolvePostgresConnectionConfig(env)!);
+    return createPostgresFactsRepository(resolvePostgresConnectionConfig(env)!, {
+      credentialCrypto,
+    });
   }
 
   if (mode === "memory") {
-    return new MemoryFactsRepository();
+    return new MemoryFactsRepository(credentialCrypto);
   }
 
   const unsupported: never = mode;
@@ -579,6 +782,8 @@ export function createFactsRepository(env: Phase0Env): FactsRepository {
 
 export function resetMemoryFactsRepository(): void {
   const store = getMemoryFactsStore();
+  store.connectIntents.clear();
+  store.connectIntentIdsByStateNonce.clear();
   store.mailboxes.clear();
   store.credentials.clear();
   store.subscriptionsById.clear();

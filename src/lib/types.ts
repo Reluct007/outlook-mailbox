@@ -43,9 +43,20 @@ export interface MailboxAccountFact {
   mailboxId: string;
   emailAddress: string;
   graphUserId: string;
+  providerAccountId: string | null;
+  authStatus: MailboxAuthStatus;
   createdAt: string;
   updatedAt: string;
 }
+
+export const MAILBOX_AUTH_STATUSES = [
+  "pending_auth",
+  "active",
+  "reauth_required",
+  "disabled",
+] as const;
+
+export type MailboxAuthStatus = (typeof MAILBOX_AUTH_STATUSES)[number];
 
 export interface MailboxCredentialFact {
   mailboxId: string;
@@ -320,13 +331,59 @@ export type QueueJob =
   | MailRecoverJob
   | SubscriptionRenewJob;
 
-export interface OnboardMailboxRequest {
+export interface UpsertMailboxAccountInput {
   mailboxId: string;
   emailAddress: string;
   graphUserId?: string;
-  accessToken?: string;
-  refreshToken?: string;
-  tokenExpiresAt?: string;
+  providerAccountId?: string | null;
+  authStatus?: MailboxAuthStatus;
+}
+
+export const CONNECT_INTENT_STATUSES = [
+  "pending",
+  "completed",
+  "expired",
+  "failed",
+] as const;
+
+export type ConnectIntentStatus = (typeof CONNECT_INTENT_STATUSES)[number];
+
+export const CONNECT_INTENT_MODES = ["connect", "reauth"] as const;
+
+export type ConnectIntentMode = (typeof CONNECT_INTENT_MODES)[number];
+
+export interface ConnectIntent {
+  id: string;
+  status: ConnectIntentStatus;
+  mode: ConnectIntentMode;
+  mailboxLabel: string | null;
+  targetMailboxId: string | null;
+  stateNonce: string;
+  pkceCodeVerifier: string;
+  redirectAfter: string | null;
+  expiresAt: string;
+  completedAt: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateConnectIntentRequest {
+  mailboxLabel?: string;
+  redirectAfter?: string;
+}
+
+export interface OutlookProfile {
+  providerAccountId: string;
+  emailAddress: string;
+  graphUserId: string;
+  displayName: string | null;
+}
+
+export interface OutlookOauthTokenSet {
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: string;
 }
 
 export interface ListHitsQuery {
@@ -390,6 +447,14 @@ export interface Phase0Env {
   PHASE0_DELAY_THRESHOLD_MS?: string;
   PHASE0_DEDUPE_TTL_MS?: string;
   OUTLOOK_WEBHOOK_CLIENT_STATE?: string;
+  OUTLOOK_WEBHOOK_NOTIFICATION_URL?: string;
   GRAPH_BASE_URL?: string;
-  OUTLOOK_GRAPH_ACCESS_TOKEN?: string;
+  OUTLOOK_OAUTH_CLIENT_ID?: string;
+  OUTLOOK_OAUTH_CLIENT_SECRET?: string;
+  OUTLOOK_OAUTH_AUTHORITY?: string;
+  OUTLOOK_OAUTH_REDIRECT_URI?: string;
+  OUTLOOK_OAUTH_AUTHORIZE_URL?: string;
+  OUTLOOK_OAUTH_TOKEN_URL?: string;
+  OUTLOOK_OAUTH_SCOPES?: string;
+  OUTLOOK_CREDENTIAL_ENCRYPTION_KEY?: string;
 }

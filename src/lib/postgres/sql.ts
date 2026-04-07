@@ -9,28 +9,102 @@ export const UPSERT_MAILBOX_ACCOUNT_SQL = `
     mailbox_id,
     email_address,
     graph_user_id,
+    provider_account_id,
+    auth_status,
     created_at,
     updated_at
   )
-  VALUES ($1, $2, $3, $4, $5)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
   ON CONFLICT (mailbox_id) DO UPDATE
   SET
     email_address = EXCLUDED.email_address,
     graph_user_id = EXCLUDED.graph_user_id,
+    provider_account_id = EXCLUDED.provider_account_id,
+    auth_status = EXCLUDED.auth_status,
     updated_at = EXCLUDED.updated_at
-  RETURNING mailbox_id, email_address, graph_user_id, created_at, updated_at
+  RETURNING mailbox_id, email_address, graph_user_id, provider_account_id, auth_status, created_at, updated_at
 `;
 
 export const GET_MAILBOX_ACCOUNT_SQL = `
-  SELECT mailbox_id, email_address, graph_user_id, created_at, updated_at
+  SELECT mailbox_id, email_address, graph_user_id, provider_account_id, auth_status, created_at, updated_at
   FROM mailbox_accounts
   WHERE mailbox_id = $1
 `;
 
 export const LIST_MAILBOX_ACCOUNTS_SQL = `
-  SELECT mailbox_id, email_address, graph_user_id, created_at, updated_at
+  SELECT mailbox_id, email_address, graph_user_id, provider_account_id, auth_status, created_at, updated_at
   FROM mailbox_accounts
   ORDER BY mailbox_id ASC
+`;
+
+export const UPDATE_MAILBOX_AUTH_STATUS_SQL = `
+  UPDATE mailbox_accounts
+  SET auth_status = $2, updated_at = $3
+  WHERE mailbox_id = $1
+  RETURNING mailbox_id, email_address, graph_user_id, provider_account_id, auth_status, created_at, updated_at
+`;
+
+export const INSERT_CONNECT_INTENT_SQL = `
+  INSERT INTO oauth_connect_intents (
+    id,
+    status,
+    mode,
+    mailbox_label,
+    target_mailbox_id,
+    state_nonce,
+    pkce_code_verifier,
+    redirect_after,
+    expires_at,
+    completed_at,
+    failure_reason,
+    created_at,
+    updated_at
+  )
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL, $10, $11)
+  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+`;
+
+export const GET_CONNECT_INTENT_BY_ID_SQL = `
+  SELECT id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  FROM oauth_connect_intents
+  WHERE id = $1
+`;
+
+export const GET_CONNECT_INTENT_BY_STATE_NONCE_SQL = `
+  SELECT id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  FROM oauth_connect_intents
+  WHERE state_nonce = $1
+`;
+
+export const COMPLETE_CONNECT_INTENT_SQL = `
+  UPDATE oauth_connect_intents
+  SET
+    status = 'completed',
+    target_mailbox_id = $2,
+    completed_at = $3,
+    failure_reason = NULL,
+    updated_at = $4
+  WHERE id = $1
+  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+`;
+
+export const FAIL_CONNECT_INTENT_SQL = `
+  UPDATE oauth_connect_intents
+  SET
+    status = 'failed',
+    failure_reason = $2,
+    updated_at = $3
+  WHERE id = $1
+  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+`;
+
+export const EXPIRE_CONNECT_INTENT_SQL = `
+  UPDATE oauth_connect_intents
+  SET
+    status = 'expired',
+    updated_at = $2
+  WHERE id = $1
+  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
 `;
 
 export const UPSERT_MAILBOX_CREDENTIAL_SQL = `

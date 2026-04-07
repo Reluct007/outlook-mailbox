@@ -1,18 +1,26 @@
 import { OutlookAuthHelper } from "./lib/auth-helper";
 import { createBlobStore } from "./lib/blob-store";
+import { renderConnectResultPage } from "./lib/connect-result-page";
 import { createFactsRepository } from "./lib/facts-repository";
 import { OutlookGraphClient } from "./lib/graph-client";
 import { badRequest, html, json, methodNotAllowed, notFound, readJson, text } from "./lib/http";
 import { buildOtpPanelResponse } from "./lib/otp-panel";
 import { renderOtpPanelPage } from "./lib/otp-panel-page";
+import {
+  buildOutlookAuthorizeUrl,
+  createRandomOAuthToken,
+  exchangeAuthorizationCode,
+  fetchOutlookProfile,
+} from "./lib/outlook-oauth";
 import { parseMessageRules } from "./lib/parser";
 import { createMailParseJob } from "./lib/queue-contracts";
 import type {
+  ConnectIntent,
+  CreateConnectIntentRequest,
   MailFetchJob,
   MailParseJob,
   MailRecoverJob,
   MailboxCoordinatorSnapshot,
-  OnboardMailboxRequest,
   OutlookNotification,
   OutlookWebhookPayload,
   Phase0Env,
@@ -113,6 +121,105 @@ function buildBlobKey(prefix: string, mailboxId: string, suffix: string): string
   return `${prefix}/${mailboxId}/${Date.now()}-${suffix}`;
 }
 
+function buildInternalUrl(request: Request, path: string): string {
+  return new URL(path, request.url).toString();
+}
+
+function redirect(to: string, status = 302): Response {
+  return new Response(null, {
+    status,
+    headers: {
+      location: to,
+    },
+  });
+}
+
+function buildConnectResultUrl(request: Request, intentId: string): string {
+  return buildInternalUrl(
+    request,
+    `/connect/result?intentId=${encodeURIComponent(intentId)}`,
+  );
+}
+
+function isExpired(isoString: string): boolean {
+  return new Date(isoString).getTime() <= Date.now();
+}
+
+async function failConnectIntentFlow(input: {
+  repository: ReturnType<typeof createFactsRepository>;
+  intent: ConnectIntent;
+  failureReason: string;
+}): Promise<void> {
+  await input.repository.failConnectIntent({
+    intentId: input.intent.id,
+    failureReason: input.failureReason,
+  });
+
+  if (input.intent.mode === "reauth" && input.intent.targetMailboxId) {
+    await input.repository.updateMailboxAuthStatus(
+      input.intent.targetMailboxId,
+      "reauth_required",
+    );
+  }
+}
+
+async function expireConnectIntentFlow(input: {
+  repository: ReturnType<typeof createFactsRepository>;
+  intent: ConnectIntent;
+}): Promise<void> {
+  await input.repository.expireConnectIntent(input.intent.id);
+
+  if (input.intent.mode === "reauth" && input.intent.targetMailboxId) {
+    await input.repository.updateMailboxAuthStatus(
+      input.intent.targetMailboxId,
+      "reauth_required",
+    );
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown_error";
+}
+
+function isGraphAuthFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^graph_(ensure_subscription_failed|fetch_message_failed|delta_failed):(401|403)$/.test(
+      error.message,
+    )
+  );
+}
+
+async function reportMailboxAuthFailure(input: {
+  env: Phase0Env;
+  repository: ReturnType<typeof createFactsRepository>;
+  mailboxId: string;
+  stage: "fetch" | "recover" | "renew" | "auth";
+  summary: string;
+  reauthRequired: boolean;
+}): Promise<void> {
+  await input.repository.saveMailboxError({
+    id: crypto.randomUUID(),
+    mailboxId: input.mailboxId,
+    stage: input.stage,
+    summary: "mailbox auth failed",
+    details: input.summary,
+    createdAt: new Date().toISOString(),
+  });
+
+  if (input.reauthRequired) {
+    await input.repository.updateMailboxAuthStatus(
+      input.mailboxId,
+      "reauth_required",
+    );
+  }
+
+  await postMailboxCommand(input.env, input.mailboxId, "/jobs/auth-failed", {
+    reauthRequired: input.reauthRequired,
+    errorSummary: input.summary,
+  });
+}
+
 function normalizeGraphMessage(input: {
   mailboxId: string;
   graphMessage: Awaited<ReturnType<OutlookGraphClient["fetchMessage"]>>;
@@ -148,6 +255,290 @@ export async function handleRequest(
 
   if ((url.pathname === "/" || url.pathname === "/index.html") && request.method === "GET") {
     return html(renderOtpPanelPage());
+  }
+
+  if (url.pathname === "/api/mailboxes/connect-intents") {
+    if (request.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+
+    const body = await readJson<CreateConnectIntentRequest>(request);
+    const intentInput: Parameters<typeof repository.createConnectIntent>[0] = {
+      mode: "connect",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      stateNonce: createRandomOAuthToken(),
+      pkceCodeVerifier: createRandomOAuthToken(48),
+    };
+    if (body.mailboxLabel !== undefined) {
+      intentInput.mailboxLabel = body.mailboxLabel;
+    }
+    if (body.redirectAfter !== undefined) {
+      intentInput.redirectAfter = body.redirectAfter;
+    }
+
+    const intent = await repository.createConnectIntent(intentInput);
+
+    return json(
+      {
+        intentId: intent.id,
+        expiresAt: intent.expiresAt,
+        startUrl: buildInternalUrl(
+          request,
+          `/oauth/outlook/start?intentId=${encodeURIComponent(intent.id)}`,
+        ),
+      },
+      { status: 201 },
+    );
+  }
+
+  if (url.pathname === "/oauth/outlook/start") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+
+    const intentId = url.searchParams.get("intentId");
+    if (!intentId) {
+      return badRequest("intentId is required");
+    }
+
+    const intent = await repository.getConnectIntentById(intentId);
+    if (!intent) {
+      return notFound("connect_intent_not_found");
+    }
+
+    if (intent.status !== "pending") {
+      return redirect(buildConnectResultUrl(request, intent.id));
+    }
+
+    if (isExpired(intent.expiresAt)) {
+      await expireConnectIntentFlow({
+        repository,
+        intent,
+      });
+      return redirect(buildConnectResultUrl(request, intent.id));
+    }
+
+    const authorizeUrl = await buildOutlookAuthorizeUrl({
+      env,
+      intent,
+    });
+    return redirect(authorizeUrl);
+  }
+
+  if (url.pathname === "/oauth/outlook/callback") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+
+    const stateNonce = url.searchParams.get("state");
+    if (!stateNonce) {
+      return badRequest("state is required");
+    }
+
+    const intent = await repository.getConnectIntentByStateNonce(stateNonce);
+    if (!intent) {
+      return notFound("connect_intent_not_found");
+    }
+
+    if (intent.status === "completed" || intent.status === "failed" || intent.status === "expired") {
+      return redirect(buildConnectResultUrl(request, intent.id));
+    }
+
+    if (isExpired(intent.expiresAt)) {
+      await expireConnectIntentFlow({
+        repository,
+        intent,
+      });
+      return redirect(buildConnectResultUrl(request, intent.id));
+    }
+
+    const oauthError = url.searchParams.get("error");
+    if (oauthError) {
+      await failConnectIntentFlow({
+        repository,
+        intent,
+        failureReason: oauthError,
+      });
+      return redirect(buildConnectResultUrl(request, intent.id));
+    }
+
+    const code = url.searchParams.get("code");
+    if (!code) {
+      await failConnectIntentFlow({
+        repository,
+        intent,
+        failureReason: "oauth_callback_code_missing",
+      });
+      return redirect(buildConnectResultUrl(request, intent.id));
+    }
+
+    try {
+      const tokenSet = await exchangeAuthorizationCode({
+        env,
+        code,
+        codeVerifier: intent.pkceCodeVerifier,
+      });
+      const profile = await fetchOutlookProfile({
+        env,
+        accessToken: tokenSet.accessToken,
+      });
+      const targetMailbox =
+        intent.mode === "reauth" && intent.targetMailboxId
+          ? await repository.getMailboxAccount(intent.targetMailboxId)
+          : null;
+      if (intent.mode === "reauth" && !targetMailbox) {
+        throw new Error("reauthorize_target_mailbox_missing");
+      }
+      if (
+        targetMailbox?.providerAccountId &&
+        targetMailbox.providerAccountId !== profile.providerAccountId
+      ) {
+        throw new Error("reauthorize_provider_account_mismatch");
+      }
+
+      const mailboxId = targetMailbox?.mailboxId ?? profile.providerAccountId;
+
+      await repository.upsertMailboxAccount({
+        mailboxId,
+        emailAddress: profile.emailAddress,
+        graphUserId: profile.graphUserId,
+        providerAccountId: profile.providerAccountId,
+        authStatus: "active",
+      });
+      await repository.upsertMailboxCredential({
+        mailboxId,
+        accessToken: tokenSet.accessToken,
+        ...(tokenSet.refreshToken ? { refreshToken: tokenSet.refreshToken } : {}),
+        tokenExpiresAt: tokenSet.tokenExpiresAt,
+      });
+
+      await postMailboxCommand<MailboxCoordinatorSnapshot>(
+        env,
+        mailboxId,
+        "/commands/onboard",
+        {
+          mailboxId,
+        },
+      );
+      await repository.completeConnectIntent({
+        intentId: intent.id,
+        targetMailboxId: mailboxId,
+      });
+    } catch (error) {
+      await failConnectIntentFlow({
+        repository,
+        intent,
+        failureReason: getErrorMessage(error),
+      });
+    }
+
+    return redirect(buildConnectResultUrl(request, intent.id));
+  }
+
+  if (url.pathname === "/connect/result") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+
+    const intentId = url.searchParams.get("intentId");
+    if (!intentId) {
+      return badRequest("intentId is required");
+    }
+
+    const intent = await repository.getConnectIntentById(intentId);
+    if (!intent) {
+      return notFound("connect_intent_not_found");
+    }
+
+    if (intent.status === "pending" && isExpired(intent.expiresAt)) {
+      await expireConnectIntentFlow({
+        repository,
+        intent,
+      });
+    }
+
+    const refreshedIntent =
+      (await repository.getConnectIntentById(intentId)) ?? intent;
+    const mailbox = refreshedIntent.targetMailboxId
+      ? await repository.getMailboxAccount(refreshedIntent.targetMailboxId)
+      : null;
+    const subscription = refreshedIntent.targetMailboxId
+      ? await repository.getMailboxSubscription(refreshedIntent.targetMailboxId)
+      : null;
+
+    if (refreshedIntent.status === "completed") {
+      return html(
+        renderConnectResultPage({
+          title:
+            refreshedIntent.mode === "reauth"
+              ? "Outlook 重新授权完成"
+              : "Outlook 授权完成",
+          headline: subscription
+            ? refreshedIntent.mode === "reauth"
+              ? "邮箱重新授权成功"
+              : "邮箱已激活"
+            : refreshedIntent.mode === "reauth"
+              ? "重新授权成功，激活进行中"
+              : "授权成功，激活进行中",
+          description: subscription
+            ? refreshedIntent.mode === "reauth"
+              ? "邮箱凭证已经更新并重新进入正常运行。"
+              : "邮箱已经完成授权并建立订阅。"
+            : refreshedIntent.mode === "reauth"
+              ? "凭证已经更新，系统正在异步恢复 Graph 订阅。"
+              : "授权和凭证落库已经完成，系统正在异步建立 Graph 订阅。",
+          detail: mailbox
+            ? `mailboxId: ${mailbox.mailboxId}\nemail: ${mailbox.emailAddress}\nauthStatus: ${mailbox.authStatus}`
+            : null,
+          continueHref: refreshedIntent.redirectAfter,
+        }),
+      );
+    }
+
+    if (refreshedIntent.status === "failed") {
+      return html(
+        renderConnectResultPage({
+          title:
+            refreshedIntent.mode === "reauth"
+              ? "Outlook 重新授权失败"
+              : "Outlook 授权失败",
+          headline: refreshedIntent.mode === "reauth" ? "重新授权失败" : "授权失败",
+          description:
+            refreshedIntent.mode === "reauth"
+              ? "重新授权没有完成，邮箱仍然保持需要重新授权的状态。"
+              : "授权流程没有完成，系统还没有接管这个邮箱。",
+          detail: refreshedIntent.failureReason,
+          continueHref: refreshedIntent.redirectAfter,
+        }),
+      );
+    }
+
+    if (refreshedIntent.status === "expired") {
+      return html(
+        renderConnectResultPage({
+          title:
+            refreshedIntent.mode === "reauth"
+              ? "Outlook 重新授权已过期"
+              : "Outlook 授权已过期",
+          headline:
+            refreshedIntent.mode === "reauth" ? "重新授权链接已过期" : "授权链接已过期",
+          description:
+            refreshedIntent.mode === "reauth"
+              ? "这次重新授权意图已经过期，邮箱仍然保持需要重新授权的状态。"
+              : "这次接入意图已经过期，请重新发起授权。",
+          continueHref: refreshedIntent.redirectAfter,
+        }),
+      );
+    }
+
+    return html(
+      renderConnectResultPage({
+        title: "Outlook 授权进行中",
+        headline: "等待完成授权",
+        description: "授权流程已经发起，但还没有完成回调。",
+        continueHref: refreshedIntent.redirectAfter,
+      }),
+    );
   }
 
   if (url.pathname === "/api/webhooks/outlook") {
@@ -230,60 +621,6 @@ export async function handleRequest(
         rejected,
       },
       { status: 202 },
-    );
-  }
-
-  if (url.pathname === "/api/mailboxes") {
-    if (request.method !== "POST") {
-      return methodNotAllowed(["POST"]);
-    }
-
-    const body = await readJson<OnboardMailboxRequest>(request);
-    if (!body.mailboxId || !body.emailAddress) {
-      return badRequest("mailboxId and emailAddress are required");
-    }
-
-    const mailbox = await repository.upsertMailboxAccount(body);
-    if (body.accessToken || body.refreshToken || body.tokenExpiresAt) {
-      const credentialInput: {
-        mailboxId: string;
-        accessToken?: string;
-        refreshToken?: string;
-        tokenExpiresAt?: string;
-      } = {
-        mailboxId: mailbox.mailboxId,
-      };
-      if (body.accessToken !== undefined) {
-        credentialInput.accessToken = body.accessToken;
-      }
-      if (body.refreshToken !== undefined) {
-        credentialInput.refreshToken = body.refreshToken;
-      }
-      if (body.tokenExpiresAt !== undefined) {
-        credentialInput.tokenExpiresAt = body.tokenExpiresAt;
-      }
-
-      await repository.upsertMailboxCredential({
-        ...credentialInput,
-      });
-    }
-
-    const state = await postMailboxCommand<MailboxCoordinatorSnapshot>(
-      env,
-      mailbox.mailboxId,
-      "/commands/onboard",
-      {
-        mailboxId: mailbox.mailboxId,
-      },
-    );
-
-    return json(
-      {
-        mailbox,
-        state,
-        subscriptionRenewQueued: true,
-      },
-      { status: 201 },
     );
   }
 
@@ -416,6 +753,48 @@ export async function handleRequest(
     });
   }
 
+  const reauthorizeMatch = url.pathname.match(/^\/api\/mailboxes\/([^/]+)\/reauthorize$/);
+  if (reauthorizeMatch) {
+    if (request.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+
+    const mailboxId = decodeURIComponent(reauthorizeMatch[1] ?? "");
+    const mailbox = await repository.getMailboxAccount(mailboxId);
+    if (!mailbox) {
+      return notFound("mailbox_not_found");
+    }
+
+    const body = await readJson<CreateConnectIntentRequest>(request);
+
+    const intentInput: Parameters<typeof repository.createConnectIntent>[0] = {
+      mode: "reauth",
+      targetMailboxId: mailboxId,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      stateNonce: createRandomOAuthToken(),
+      pkceCodeVerifier: createRandomOAuthToken(48),
+    };
+    if (body.redirectAfter !== undefined) {
+      intentInput.redirectAfter = body.redirectAfter;
+    }
+
+    const intent = await repository.createConnectIntent(intentInput);
+    await repository.updateMailboxAuthStatus(mailboxId, "pending_auth");
+
+    return json(
+      {
+        intentId: intent.id,
+        mailboxId,
+        expiresAt: intent.expiresAt,
+        startUrl: buildInternalUrl(
+          request,
+          `/oauth/outlook/start?intentId=${encodeURIComponent(intent.id)}`,
+        ),
+      },
+      { status: 201 },
+    );
+  }
+
   const recoveryMatch = url.pathname.match(/^\/api\/mailboxes\/([^/]+)\/recovery$/);
   if (recoveryMatch) {
     if (request.method !== "POST") {
@@ -458,15 +837,56 @@ async function handleFetchJob(job: MailFetchJob, env: Phase0Env): Promise<void> 
   const repository = createFactsRepository(env);
   const blobStore = createBlobStore(env);
   const graphClient = new OutlookGraphClient(env);
+  const authHelper = new OutlookAuthHelper(env, repository);
   const mailbox = await repository.getMailboxAccount(job.mailboxId);
   if (!mailbox) {
     throw new Error(`mailbox_not_found:${job.mailboxId}`);
   }
 
-  const graphMessage = await graphClient.fetchMessage({
-    mailbox,
-    messageId: job.messageId,
-  });
+  const accessTokenResult = await authHelper.getMailboxAccessToken(mailbox);
+  if (!accessTokenResult.ok || !accessTokenResult.accessToken) {
+    await reportMailboxAuthFailure({
+      env,
+      repository,
+      mailboxId: job.mailboxId,
+      stage: "fetch",
+      summary: accessTokenResult.error ?? "graph_access_token_unavailable",
+      reauthRequired: accessTokenResult.reauthRequired,
+    });
+    throw new Error(accessTokenResult.error ?? "graph_access_token_unavailable");
+  }
+
+  let graphMessage;
+  try {
+    graphMessage = await graphClient.fetchMessage({
+      mailbox,
+      messageId: job.messageId,
+      accessToken: accessTokenResult.accessToken,
+    });
+  } catch (error) {
+    if (!isGraphAuthFailure(error)) {
+      throw error;
+    }
+
+    const refreshResult = await authHelper.refreshMailboxAccessToken(mailbox);
+    if (!refreshResult.ok || !refreshResult.accessToken) {
+      await reportMailboxAuthFailure({
+        env,
+        repository,
+        mailboxId: job.mailboxId,
+        stage: "fetch",
+        summary: refreshResult.error ?? getErrorMessage(error),
+        reauthRequired: refreshResult.reauthRequired,
+      });
+      throw error;
+    }
+
+    graphMessage = await graphClient.fetchMessage({
+      mailbox,
+      messageId: job.messageId,
+      accessToken: refreshResult.accessToken,
+    });
+  }
 
   const bodyHtmlBlobKey = graphMessage.bodyHtml
     ? buildBlobKey("message/body-html", job.mailboxId, `${job.messageId}.html`)
@@ -529,15 +949,56 @@ async function handleParseJob(job: MailParseJob, env: Phase0Env): Promise<void> 
 async function handleRecoverJob(job: MailRecoverJob, env: Phase0Env): Promise<void> {
   const repository = createFactsRepository(env);
   const graphClient = new OutlookGraphClient(env);
+  const authHelper = new OutlookAuthHelper(env, repository);
   const mailbox = await repository.getMailboxAccount(job.mailboxId);
   if (!mailbox) {
     throw new Error(`mailbox_not_found:${job.mailboxId}`);
   }
 
-  const delta = await graphClient.recoverMessages({
-    mailbox,
-    currentCursor: job.currentCursor,
-  });
+  const accessTokenResult = await authHelper.getMailboxAccessToken(mailbox);
+  if (!accessTokenResult.ok || !accessTokenResult.accessToken) {
+    await reportMailboxAuthFailure({
+      env,
+      repository,
+      mailboxId: job.mailboxId,
+      stage: "recover",
+      summary: accessTokenResult.error ?? "graph_access_token_unavailable",
+      reauthRequired: accessTokenResult.reauthRequired,
+    });
+    throw new Error(accessTokenResult.error ?? "graph_access_token_unavailable");
+  }
+
+  let delta;
+  try {
+    delta = await graphClient.recoverMessages({
+      mailbox,
+      currentCursor: job.currentCursor,
+      accessToken: accessTokenResult.accessToken,
+    });
+  } catch (error) {
+    if (!isGraphAuthFailure(error)) {
+      throw error;
+    }
+
+    const refreshResult = await authHelper.refreshMailboxAccessToken(mailbox);
+    if (!refreshResult.ok || !refreshResult.accessToken) {
+      await reportMailboxAuthFailure({
+        env,
+        repository,
+        mailboxId: job.mailboxId,
+        stage: "recover",
+        summary: refreshResult.error ?? getErrorMessage(error),
+        reauthRequired: refreshResult.reauthRequired,
+      });
+      throw error;
+    }
+
+    delta = await graphClient.recoverMessages({
+      mailbox,
+      currentCursor: job.currentCursor,
+      accessToken: refreshResult.accessToken,
+    });
+  }
 
   const snapshot = await fetchMailboxSnapshot(env, job.mailboxId);
   if (!snapshot) {
@@ -612,9 +1073,30 @@ async function handleRenewJob(
     `client-state:${job.mailboxId}`;
 
   try {
+    const accessTokenResult = await authHelper.getMailboxAccessToken(mailbox);
+    if (!accessTokenResult.ok || !accessTokenResult.accessToken) {
+      await reportMailboxAuthFailure({
+        env,
+        repository,
+        mailboxId: job.mailboxId,
+        stage: "renew",
+        summary: accessTokenResult.error ?? "graph_access_token_unavailable",
+        reauthRequired: accessTokenResult.reauthRequired,
+      });
+
+      await postMailboxCommand(env, job.mailboxId, "/jobs/renew-finished", {
+        subscriptionVersion: job.versions.subscriptionVersion,
+        ok: false,
+        reauthRequired: accessTokenResult.reauthRequired,
+        errorSummary: accessTokenResult.error ?? "renew_failed",
+      });
+      return;
+    }
+
     const subscription = await graphClient.ensureSubscription({
       mailbox,
       clientState,
+      accessToken: accessTokenResult.accessToken,
     });
 
     await repository.upsertMailboxSubscription({
@@ -624,6 +1106,7 @@ async function handleRenewJob(
       subscriptionVersion: job.versions.subscriptionVersion,
       expirationDateTime: subscription.expirationDateTime,
     });
+    await repository.updateMailboxAuthStatus(job.mailboxId, "active");
 
     await postMailboxCommand(env, job.mailboxId, "/jobs/renew-finished", {
       subscriptionVersion: job.versions.subscriptionVersion,
@@ -638,6 +1121,7 @@ async function handleRenewJob(
       const retrySubscription = await graphClient.ensureSubscription({
         mailbox,
         clientState,
+        accessToken: refreshResult.accessToken,
       });
 
       await repository.upsertMailboxSubscription({
@@ -647,6 +1131,7 @@ async function handleRenewJob(
         subscriptionVersion: job.versions.subscriptionVersion,
         expirationDateTime: retrySubscription.expirationDateTime,
       });
+      await repository.updateMailboxAuthStatus(job.mailboxId, "active");
 
       await postMailboxCommand(env, job.mailboxId, "/jobs/renew-finished", {
         subscriptionVersion: job.versions.subscriptionVersion,
@@ -657,13 +1142,22 @@ async function handleRenewJob(
       return;
     }
 
+    await reportMailboxAuthFailure({
+      env,
+      repository,
+      mailboxId: job.mailboxId,
+      stage: "renew",
+      summary: refreshResult.error ?? getErrorMessage(error),
+      reauthRequired: refreshResult.reauthRequired,
+    });
+
     await repository.saveMailboxError({
       id: crypto.randomUUID(),
       mailboxId: job.mailboxId,
       stage: "renew",
       summary: "subscription renew failed",
       details:
-        error instanceof Error ? error.message : "unknown_renew_failure",
+        getErrorMessage(error),
       createdAt: new Date().toISOString(),
     });
 
