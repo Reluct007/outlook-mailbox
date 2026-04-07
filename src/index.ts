@@ -1,11 +1,22 @@
 import { OutlookAuthHelper } from "./lib/auth-helper";
 import { createBlobStore } from "./lib/blob-store";
+import { renderConnectLauncherPage } from "./lib/connect-launcher-page";
 import { renderConnectResultPage } from "./lib/connect-result-page";
 import { createFactsRepository } from "./lib/facts-repository";
 import { OutlookGraphClient } from "./lib/graph-client";
-import { badRequest, html, json, methodNotAllowed, notFound, readJson, text } from "./lib/http";
+import { badRequest, html, json, methodNotAllowed, notFound, text } from "./lib/http";
 import { buildOtpPanelResponse } from "./lib/otp-panel";
 import { renderOtpPanelPage } from "./lib/otp-panel-page";
+import {
+  decodePathParam,
+  isProtectedOperatorPath,
+  parseBooleanQuery,
+  parseConnectIntentRequest,
+  parseLimitQuery,
+  parseWebhookPayload,
+  readJsonObject,
+  requireOperatorAuthorization,
+} from "./lib/request-guards";
 import {
   buildOutlookAuthorizeUrl,
   createRandomOAuthToken,
@@ -16,7 +27,6 @@ import { parseMessageRules } from "./lib/parser";
 import { createMailParseJob } from "./lib/queue-contracts";
 import type {
   ConnectIntent,
-  CreateConnectIntentRequest,
   MailFetchJob,
   MailParseJob,
   MailRecoverJob,
@@ -53,14 +63,6 @@ function makeExecutionContext(): ExecutionContext {
 
 function getDelayThresholdMs(env: Phase0Env): number {
   return Number.parseInt(env.PHASE0_DELAY_THRESHOLD_MS ?? "300000", 10);
-}
-
-function parseBoolean(value: string | null): boolean | undefined {
-  if (value === null) {
-    return undefined;
-  }
-
-  return value === "true";
 }
 
 function createEventId(notification: OutlookNotification): string {
@@ -139,6 +141,97 @@ function buildConnectResultUrl(request: Request, intentId: string): string {
     request,
     `/connect/result?intentId=${encodeURIComponent(intentId)}`,
   );
+}
+
+function buildConnectLauncherUrl(request: Request, assetId?: string | null): string {
+  if (!assetId) {
+    return buildInternalUrl(request, "/connect/outlook");
+  }
+
+  return buildInternalUrl(
+    request,
+    `/connect/outlook?assetId=${encodeURIComponent(assetId)}`,
+  );
+}
+
+function buildDefaultRedirectAfter(assetId?: string | null): string {
+  if (!assetId) {
+    return "/connect/outlook";
+  }
+
+  return `/connect/outlook?assetId=${encodeURIComponent(assetId)}`;
+}
+
+function withNoStore(init: ResponseInit = {}): ResponseInit {
+  const headers = new Headers(init.headers);
+  headers.set("cache-control", "no-store");
+
+  return {
+    ...init,
+    headers,
+  };
+}
+
+function serializeConnectIntent(
+  request: Request,
+  intent: ConnectIntent,
+  reused: boolean,
+) {
+  return {
+    intentId: intent.id,
+    assetId: intent.assetId,
+    status: intent.status,
+    expiresAt: intent.expiresAt,
+    startUrl: buildInternalUrl(
+      request,
+      `/oauth/outlook/start?intentId=${encodeURIComponent(intent.id)}`,
+    ),
+    resultUrl: buildConnectResultUrl(request, intent.id),
+    redirectAfter: intent.redirectAfter,
+    reused,
+  };
+}
+
+function describeConnectFailure(failureReason: string | null): {
+  description: string;
+  detail: string | null;
+} {
+  switch (failureReason) {
+    case "access_denied":
+      return {
+        description: "Microsoft 没有批准这次授权。请确认当前账号、权限同意和风控状态后重试。",
+        detail: "问题：授权被 Microsoft 拒绝\n原因：用户取消、风控拦截，或租户策略不允许\n修复：确认登录的是目标邮箱，再重新发起一次授权",
+      };
+    case "oauth_callback_code_missing":
+      return {
+        description: "Microsoft 已经回跳，但没有返回授权 code。这次授权没有真正完成。",
+        detail: "问题：回调里缺少 code\n原因：Microsoft 回跳不完整，或中间环节被打断\n修复：重新打开 launch link，再完成一次完整授权",
+      };
+    case "connect_provider_account_mismatch":
+    case "reauthorize_provider_account_mismatch":
+      return {
+        description: "授权的不是目标邮箱，所以系统拒绝接管这次结果。",
+        detail: "问题：当前登录的 Microsoft 账号和目标 assetId 不一致\n原因：切错账号，或浏览器仍然保留了别的 Microsoft 登录态\n修复：退出当前 Microsoft 账号，切到正确邮箱后重试",
+      };
+    case "connect_target_mailbox_missing":
+    case "reauthorize_target_mailbox_missing":
+      return {
+        description: "这次授权缺少明确目标资产，系统无法继续。",
+        detail: "问题：目标 assetId 不完整\n原因：intent 数据缺失或已失效\n修复：回到发起页，重新生成新的 intent",
+      };
+    default:
+      if (failureReason?.startsWith("mailbox_command_failed:/commands/onboard:")) {
+        return {
+          description: "OAuth 已经过了 Microsoft，但系统还没有完成接管这个邮箱。",
+          detail: "问题：邮箱 onboard 失败\n原因：后端接管或订阅初始化没有成功\n修复：先看结果页和服务日志，修好后重新发起授权",
+        };
+      }
+
+      return {
+        description: "授权流程没有完成，系统还没有接管这个邮箱。",
+        detail: failureReason ? `supportCode: ${failureReason}` : null,
+      };
+  }
 }
 
 function isExpired(isoString: string): boolean {
@@ -244,7 +337,7 @@ function normalizeGraphMessage(input: {
   };
 }
 
-export async function handleRequest(
+async function handleRequestInner(
   request: Request,
   env: Phase0Env,
   ctx: ExecutionContext,
@@ -253,42 +346,103 @@ export async function handleRequest(
   const repository = createFactsRepository(env);
   const blobStore = createBlobStore(env);
 
+  if (isProtectedOperatorPath(url.pathname)) {
+    const authResponse = requireOperatorAuthorization(request, env);
+    if (authResponse) {
+      return authResponse;
+    }
+  }
+
   if ((url.pathname === "/" || url.pathname === "/index.html") && request.method === "GET") {
-    return html(renderOtpPanelPage());
+    return html(renderOtpPanelPage(), withNoStore());
+  }
+
+  if (url.pathname === "/connect/outlook") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+
+    return html(
+      renderConnectLauncherPage(),
+      withNoStore(),
+    );
   }
 
   if (url.pathname === "/api/mailboxes/connect-intents") {
-    if (request.method !== "POST") {
-      return methodNotAllowed(["POST"]);
+    if (request.method === "GET") {
+      const query = parseConnectIntentRequest({
+        assetId: url.searchParams.get("assetId") ?? undefined,
+      });
+      const assetId = query.assetId;
+      if (!assetId) {
+        return badRequest("assetId is required");
+      }
+
+      const currentIntent = await repository.getLatestConnectIntentByAssetId(assetId);
+      if (!currentIntent || currentIntent.status !== "pending") {
+        return json({ intent: null }, withNoStore());
+      }
+
+      if (isExpired(currentIntent.expiresAt)) {
+        await expireConnectIntentFlow({
+          repository,
+          intent: currentIntent,
+        });
+        return json({ intent: null }, withNoStore());
+      }
+
+      return json(
+        {
+          intent: serializeConnectIntent(request, currentIntent, true),
+        },
+        withNoStore(),
+      );
     }
 
-    const body = await readJson<CreateConnectIntentRequest>(request);
+    if (request.method !== "POST") {
+      return methodNotAllowed(["GET", "POST"]);
+    }
+
+    const body = parseConnectIntentRequest(await readJsonObject(request));
+    const assetId = body.assetId;
+
+    if (assetId) {
+      const currentIntent = await repository.getLatestConnectIntentByAssetId(assetId);
+      if (
+        currentIntent?.status === "pending" &&
+        !isExpired(currentIntent.expiresAt) &&
+        !body.supersedeCurrent
+      ) {
+        return json(
+          serializeConnectIntent(request, currentIntent, true),
+          withNoStore({ status: 200 }),
+        );
+      }
+      if (currentIntent?.status === "pending" && body.supersedeCurrent) {
+        await expireConnectIntentFlow({
+          repository,
+          intent: currentIntent,
+        });
+      }
+      if (currentIntent?.status === "pending" && isExpired(currentIntent.expiresAt)) {
+        await expireConnectIntentFlow({
+          repository,
+          intent: currentIntent,
+        });
+      }
+    }
+
     const intentInput: Parameters<typeof repository.createConnectIntent>[0] = {
       mode: "connect",
+      assetId: assetId ?? null,
+      redirectAfter: body.redirectAfter ?? buildDefaultRedirectAfter(assetId ?? null),
       expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       stateNonce: createRandomOAuthToken(),
       pkceCodeVerifier: createRandomOAuthToken(48),
     };
-    if (body.mailboxLabel !== undefined) {
-      intentInput.mailboxLabel = body.mailboxLabel;
-    }
-    if (body.redirectAfter !== undefined) {
-      intentInput.redirectAfter = body.redirectAfter;
-    }
-
     const intent = await repository.createConnectIntent(intentInput);
 
-    return json(
-      {
-        intentId: intent.id,
-        expiresAt: intent.expiresAt,
-        startUrl: buildInternalUrl(
-          request,
-          `/oauth/outlook/start?intentId=${encodeURIComponent(intent.id)}`,
-        ),
-      },
-      { status: 201 },
-    );
+    return json(serializeConnectIntent(request, intent, false), withNoStore({ status: 201 }));
   }
 
   if (url.pathname === "/oauth/outlook/start") {
@@ -382,14 +536,16 @@ export async function handleRequest(
         env,
         accessToken: tokenSet.accessToken,
       });
-      const targetMailbox =
-        intent.mode === "reauth" && intent.targetMailboxId
-          ? await repository.getMailboxAccount(intent.targetMailboxId)
-          : null;
+      const reauthTargetMailboxId =
+        intent.mode === "reauth" ? intent.targetMailboxId : null;
+      const targetMailbox = reauthTargetMailboxId
+        ? await repository.getMailboxAccount(reauthTargetMailboxId)
+        : null;
       if (intent.mode === "reauth" && !targetMailbox) {
         throw new Error("reauthorize_target_mailbox_missing");
       }
       if (
+        intent.mode === "reauth" &&
         targetMailbox?.providerAccountId &&
         targetMailbox.providerAccountId !== profile.providerAccountId
       ) {
@@ -403,7 +559,7 @@ export async function handleRequest(
         emailAddress: profile.emailAddress,
         graphUserId: profile.graphUserId,
         providerAccountId: profile.providerAccountId,
-        authStatus: "active",
+        authStatus: "pending_auth",
       });
       await repository.upsertMailboxCredential({
         mailboxId,
@@ -420,6 +576,7 @@ export async function handleRequest(
           mailboxId,
         },
       );
+      await repository.updateMailboxAuthStatus(mailboxId, "active");
       await repository.completeConnectIntent({
         intentId: intent.id,
         targetMailboxId: mailboxId,
@@ -490,12 +647,16 @@ export async function handleRequest(
           detail: mailbox
             ? `mailboxId: ${mailbox.mailboxId}\nemail: ${mailbox.emailAddress}\nauthStatus: ${mailbox.authStatus}`
             : null,
-          continueHref: refreshedIntent.redirectAfter,
+          continueHref:
+            refreshedIntent.redirectAfter ??
+            buildConnectLauncherUrl(request, refreshedIntent.assetId),
         }),
+        withNoStore(),
       );
     }
 
     if (refreshedIntent.status === "failed") {
+      const failureView = describeConnectFailure(refreshedIntent.failureReason);
       return html(
         renderConnectResultPage({
           title:
@@ -503,13 +664,13 @@ export async function handleRequest(
               ? "Outlook 重新授权失败"
               : "Outlook 授权失败",
           headline: refreshedIntent.mode === "reauth" ? "重新授权失败" : "授权失败",
-          description:
-            refreshedIntent.mode === "reauth"
-              ? "重新授权没有完成，邮箱仍然保持需要重新授权的状态。"
-              : "授权流程没有完成，系统还没有接管这个邮箱。",
-          detail: refreshedIntent.failureReason,
-          continueHref: refreshedIntent.redirectAfter,
+          description: failureView.description,
+          detail: failureView.detail,
+          continueHref:
+            refreshedIntent.redirectAfter ??
+            buildConnectLauncherUrl(request, refreshedIntent.assetId),
         }),
+        withNoStore(),
       );
     }
 
@@ -526,8 +687,11 @@ export async function handleRequest(
             refreshedIntent.mode === "reauth"
               ? "这次重新授权意图已经过期，邮箱仍然保持需要重新授权的状态。"
               : "这次接入意图已经过期，请重新发起授权。",
-          continueHref: refreshedIntent.redirectAfter,
+          continueHref:
+            refreshedIntent.redirectAfter ??
+            buildConnectLauncherUrl(request, refreshedIntent.assetId),
         }),
+        withNoStore(),
       );
     }
 
@@ -536,8 +700,11 @@ export async function handleRequest(
         title: "Outlook 授权进行中",
         headline: "等待完成授权",
         description: "授权流程已经发起，但还没有完成回调。",
-        continueHref: refreshedIntent.redirectAfter,
+        continueHref:
+          refreshedIntent.redirectAfter ??
+          buildConnectLauncherUrl(request, refreshedIntent.assetId),
       }),
+      withNoStore(),
     );
   }
 
@@ -550,23 +717,18 @@ export async function handleRequest(
       return methodNotAllowed(["POST"]);
     }
 
-    const rawPayload = await readJson<OutlookWebhookPayload>(request);
-    if (!Array.isArray(rawPayload.value)) {
-      return badRequest("payload.value must be an array");
-    }
+    const rawPayload = parseWebhookPayload(
+      await readJsonObject(request, "webhook payload must be valid JSON"),
+    );
 
-    const rawPayloadKey = buildBlobKey("webhook/raw", "batch", crypto.randomUUID());
-    ctx.waitUntil(blobStore.putJson(rawPayloadKey, rawPayload));
-
-    const grouped = new Map<string, RoutedWebhookNotification[]>();
+    const acceptedNotifications: Array<{
+      mailboxId: string;
+      subscriptionVersion: number;
+      notification: OutlookNotification;
+    }> = [];
     const rejected: Array<{ subscriptionId?: string; reason: string }> = [];
 
-    for (const notification of rawPayload.value) {
-      if (!notification.subscriptionId) {
-        rejected.push({ reason: "missing_subscription_id" });
-        continue;
-      }
-
+    for (const notification of rawPayload.value ?? []) {
       const subscription = await repository.resolveMailboxBySubscriptionId(
         notification.subscriptionId,
       );
@@ -591,15 +753,30 @@ export async function handleRequest(
         continue;
       }
 
-      const mailboxEvents = grouped.get(subscription.mailboxId) ?? [];
-      mailboxEvents.push({
-        eventId: createEventId(notification),
+      acceptedNotifications.push({
         mailboxId: subscription.mailboxId,
         subscriptionVersion: subscription.subscriptionVersion,
-        rawPayloadKey,
         notification,
       });
-      grouped.set(subscription.mailboxId, mailboxEvents);
+    }
+
+    let rawPayloadKey: string | null = null;
+    if (acceptedNotifications.length > 0) {
+      rawPayloadKey = buildBlobKey("webhook/raw", "batch", crypto.randomUUID());
+      await blobStore.putJson(rawPayloadKey, rawPayload);
+    }
+
+    const grouped = new Map<string, RoutedWebhookNotification[]>();
+    for (const acceptedEvent of acceptedNotifications) {
+      const mailboxEvents = grouped.get(acceptedEvent.mailboxId) ?? [];
+      mailboxEvents.push({
+        eventId: createEventId(acceptedEvent.notification),
+        mailboxId: acceptedEvent.mailboxId,
+        subscriptionVersion: acceptedEvent.subscriptionVersion,
+        rawPayloadKey,
+        notification: acceptedEvent.notification,
+      });
+      grouped.set(acceptedEvent.mailboxId, mailboxEvents);
     }
 
     const accepted: Array<{ mailboxId: string; count: number }> = [];
@@ -641,29 +818,29 @@ export async function handleRequest(
       hitsQuery.mailboxId = mailboxId;
     }
 
-    const processed = parseBoolean(url.searchParams.get("processed"));
+    const processed = parseBooleanQuery(url.searchParams.get("processed"), "processed");
     if (processed !== undefined) {
       hitsQuery.processed = processed;
     }
 
     const hitType = url.searchParams.get("hitType");
-    if (
-      hitType === "verification_code" ||
-      hitType === "reward" ||
-      hitType === "cashback" ||
-      hitType === "redeem"
-    ) {
+    if (hitType !== null) {
+      if (
+        hitType !== "verification_code" &&
+        hitType !== "reward" &&
+        hitType !== "cashback" &&
+        hitType !== "redeem"
+      ) {
+        return badRequest("hitType must be one of verification_code, reward, cashback, redeem");
+      }
       hitsQuery.hitType = hitType;
     }
 
-    const limit = url.searchParams.get("limit");
-    if (limit !== null) {
-      hitsQuery.limit = Number.parseInt(limit, 10);
-    }
+    hitsQuery.limit = parseLimitQuery(url.searchParams.get("limit"));
 
     const hits = await repository.listHits(hitsQuery);
 
-    return json({ hits });
+    return json({ hits }, withNoStore());
   }
 
   if (url.pathname === "/api/otp-panel") {
@@ -697,6 +874,7 @@ export async function handleRequest(
         currentSignals,
         recentSignalHistory,
       }),
+      withNoStore(),
     );
   }
 
@@ -706,7 +884,7 @@ export async function handleRequest(
       return methodNotAllowed(["GET"]);
     }
 
-    const messageId = decodeURIComponent(messageMatch[1] ?? "");
+    const messageId = decodePathParam(messageMatch[1], "messageId");
     const detail = await repository.getMessageDetail(messageId);
     if (!detail) {
       return notFound("message_not_found");
@@ -720,11 +898,14 @@ export async function handleRequest(
       blobMissing = bodyHtml === null;
     }
 
-    return json({
-      ...detail,
-      bodyHtml,
-      blobMissing,
-    });
+    return json(
+      {
+        ...detail,
+        bodyHtml,
+        blobMissing,
+      },
+      withNoStore(),
+    );
   }
 
   const mailboxMatch = url.pathname.match(/^\/api\/mailboxes\/([^/]+)$/);
@@ -733,7 +914,7 @@ export async function handleRequest(
       return methodNotAllowed(["GET"]);
     }
 
-    const mailboxId = decodeURIComponent(mailboxMatch[1] ?? "");
+    const mailboxId = decodePathParam(mailboxMatch[1], "mailboxId");
     const mailbox = await repository.getMailboxAccount(mailboxId);
     if (!mailbox) {
       return notFound("mailbox_not_found");
@@ -744,13 +925,16 @@ export async function handleRequest(
     const subscription = await repository.getMailboxSubscription(mailboxId);
     const cursor = await repository.getMailboxCursor(mailboxId);
 
-    return json({
-      mailbox,
-      state,
-      aggregates,
-      subscription,
-      cursor,
-    });
+    return json(
+      {
+        mailbox,
+        state,
+        aggregates,
+        subscription,
+        cursor,
+      },
+      withNoStore(),
+    );
   }
 
   const reauthorizeMatch = url.pathname.match(/^\/api\/mailboxes\/([^/]+)\/reauthorize$/);
@@ -759,40 +943,28 @@ export async function handleRequest(
       return methodNotAllowed(["POST"]);
     }
 
-    const mailboxId = decodeURIComponent(reauthorizeMatch[1] ?? "");
+    const mailboxId = decodePathParam(reauthorizeMatch[1], "mailboxId");
     const mailbox = await repository.getMailboxAccount(mailboxId);
     if (!mailbox) {
       return notFound("mailbox_not_found");
     }
 
-    const body = await readJson<CreateConnectIntentRequest>(request);
+    const body = parseConnectIntentRequest(await readJsonObject(request));
 
     const intentInput: Parameters<typeof repository.createConnectIntent>[0] = {
       mode: "reauth",
+      assetId: mailboxId,
       targetMailboxId: mailboxId,
+      redirectAfter: body.redirectAfter ?? buildDefaultRedirectAfter(mailboxId),
       expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       stateNonce: createRandomOAuthToken(),
       pkceCodeVerifier: createRandomOAuthToken(48),
     };
-    if (body.redirectAfter !== undefined) {
-      intentInput.redirectAfter = body.redirectAfter;
-    }
 
     const intent = await repository.createConnectIntent(intentInput);
     await repository.updateMailboxAuthStatus(mailboxId, "pending_auth");
 
-    return json(
-      {
-        intentId: intent.id,
-        mailboxId,
-        expiresAt: intent.expiresAt,
-        startUrl: buildInternalUrl(
-          request,
-          `/oauth/outlook/start?intentId=${encodeURIComponent(intent.id)}`,
-        ),
-      },
-      { status: 201 },
-    );
+    return json(serializeConnectIntent(request, intent, false), withNoStore({ status: 201 }));
   }
 
   const recoveryMatch = url.pathname.match(/^\/api\/mailboxes\/([^/]+)\/recovery$/);
@@ -801,7 +973,7 @@ export async function handleRequest(
       return methodNotAllowed(["POST"]);
     }
 
-    const mailboxId = decodeURIComponent(recoveryMatch[1] ?? "");
+    const mailboxId = decodePathParam(recoveryMatch[1], "mailboxId");
     const mailbox = await repository.getMailboxAccount(mailboxId);
     if (!mailbox) {
       return notFound("mailbox_not_found");
@@ -817,10 +989,26 @@ export async function handleRequest(
       },
     );
 
-    return json(payload, { status: 202 });
+    return json(payload, withNoStore({ status: 202 }));
   }
 
   return notFound();
+}
+
+export async function handleRequest(
+  request: Request,
+  env: Phase0Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  try {
+    return await handleRequestInner(request, env, ctx);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error;
+    }
+
+    throw error;
+  }
 }
 
 async function notifyMailboxFetchFinished(

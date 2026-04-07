@@ -54,7 +54,18 @@ function createEnv(overrides: Partial<Phase0Env> = {}): Phase0Env {
     OUTLOOK_OAUTH_REDIRECT_URI: "https://example.com/oauth/outlook/callback",
     OUTLOOK_OAUTH_AUTHORITY: "consumers",
     OUTLOOK_CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    PHASE0_OPERATOR_USERNAME: "operator",
+    PHASE0_OPERATOR_PASSWORD: "test-password",
     ...overrides,
+  };
+}
+
+function createOperatorHeaders(
+  headers: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    authorization: "Basic " + btoa("operator:test-password"),
+    ...headers,
   };
 }
 
@@ -76,17 +87,33 @@ describe("OAuth routes", () => {
     vi.unstubAllGlobals();
   });
 
-  it("connect-intents 会返回 intentId 和 startUrl，start 路由会 302 到 Microsoft", async () => {
-    const env = createEnv();
+  it("connect-intents 未授权时返回 401 basic auth challenge", async () => {
     const response = await handleRequest(
       new Request("https://example.com/api/mailboxes/connect-intents", {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          mailboxLabel: "ops-mailbox",
-        }),
+        body: JSON.stringify({}),
+      }),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toContain("Basic");
+  });
+
+  it("connect-intents 会返回 intentId 和 startUrl，start 路由会 302 到 Microsoft", async () => {
+    const env = createEnv();
+    const response = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
       }),
       env,
       createCtx(),
@@ -96,9 +123,12 @@ describe("OAuth routes", () => {
     const payload = (await response.json()) as {
       intentId: string;
       startUrl: string;
+      resultUrl: string;
     };
     expect(payload.intentId).toBeTruthy();
     expect(payload.startUrl).toContain("/oauth/outlook/start?intentId=");
+    expect(payload.resultUrl).toContain(`/connect/result?intentId=${payload.intentId}`);
+    expect(response.headers.get("cache-control")).toBe("no-store");
 
     const startResponse = await handleRequest(
       new Request(payload.startUrl),
@@ -112,12 +142,178 @@ describe("OAuth routes", () => {
     );
   });
 
+  it("connect-intents 会拒绝非站内 redirectAfter", async () => {
+    const response = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          redirectAfter: "https://evil.example/steal",
+        }),
+      }),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "bad_request",
+    });
+  });
+
+  it("connect-intents 非法 JSON 时返回 400", async () => {
+    const response = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: "{",
+      }),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "bad_request",
+    });
+  });
+
+  it("connect-intents 缺少 assetId 时也可以创建通用授权 intent", async () => {
+    const response = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      }),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      assetId: null,
+      status: "pending",
+      redirectAfter: "/connect/outlook",
+    });
+  });
+
+  it("同一 assetId 的 connect-intent 默认复用当前未过期 intent，supersede 时才生成新的 intent", async () => {
+    const env = createEnv();
+    const firstResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          assetId: "provider-1",
+        }),
+      }),
+      env,
+      createCtx(),
+    );
+    expect(firstResponse.status).toBe(201);
+    const firstPayload = (await firstResponse.json()) as { intentId: string };
+
+    const secondResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          assetId: "provider-1",
+        }),
+      }),
+      env,
+      createCtx(),
+    );
+    expect(secondResponse.status).toBe(200);
+    const secondPayload = (await secondResponse.json()) as { intentId: string; reused: boolean };
+    expect(secondPayload.intentId).toBe(firstPayload.intentId);
+    expect(secondPayload.reused).toBe(true);
+
+    const thirdResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          assetId: "provider-1",
+          supersedeCurrent: true,
+        }),
+      }),
+      env,
+      createCtx(),
+    );
+    expect(thirdResponse.status).toBe(201);
+    const thirdPayload = (await thirdResponse.json()) as { intentId: string; reused: boolean };
+    expect(thirdPayload.intentId).not.toBe(firstPayload.intentId);
+    expect(thirdPayload.reused).toBe(false);
+
+    const repository = createFactsRepository(env);
+    expect((await repository.getConnectIntentById(firstPayload.intentId))?.status).toBe("expired");
+    expect((await repository.getConnectIntentById(thirdPayload.intentId))?.status).toBe("pending");
+  });
+
+  it("可以按 assetId 读取当前未过期 intent", async () => {
+    const env = createEnv();
+    const createResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          assetId: "provider-1",
+        }),
+      }),
+      env,
+      createCtx(),
+    );
+    const createPayload = (await createResponse.json()) as { intentId: string };
+
+    const currentResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents?assetId=provider-1", {
+        method: "GET",
+        headers: createOperatorHeaders(),
+      }),
+      env,
+      createCtx(),
+    );
+
+    expect(currentResponse.status).toBe(200);
+    expect(currentResponse.headers.get("cache-control")).toBe("no-store");
+    expect(await currentResponse.json()).toMatchObject({
+      intent: {
+        intentId: createPayload.intentId,
+        assetId: "provider-1",
+        status: "pending",
+      },
+    });
+  });
+
   it("callback 成功后会落库 mailbox/credential 并跳转到结果页", async () => {
     const env = createEnv();
     const createResponse = await handleRequest(
       new Request("https://example.com/api/mailboxes/connect-intents", {
         method: "POST",
         headers: {
+          ...createOperatorHeaders(),
           "content-type": "application/json",
         },
         body: JSON.stringify({}),
@@ -199,12 +395,16 @@ describe("OAuth routes", () => {
     const resultResponse = await handleRequest(
       new Request(
         `https://example.com/connect/result?intentId=${encodeURIComponent(createPayload.intentId)}`,
+        {
+          headers: createOperatorHeaders(),
+        },
       ),
       env,
       createCtx(),
     );
 
     expect(resultResponse.status).toBe(200);
+    expect(resultResponse.headers.get("cache-control")).toBe("no-store");
     expect(await resultResponse.text()).toContain("授权成功，激活进行中");
   });
 
@@ -214,9 +414,12 @@ describe("OAuth routes", () => {
       new Request("https://example.com/api/mailboxes/connect-intents", {
         method: "POST",
         headers: {
+          ...createOperatorHeaders(),
           "content-type": "application/json",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          assetId: "provider-1",
+        }),
       }),
       env,
       createCtx(),
@@ -239,6 +442,144 @@ describe("OAuth routes", () => {
     ).toBe("failed");
   });
 
+  it("connect callback 不再预先校验 assetId，实际登录的账号会被接管", async () => {
+    const env = createEnv();
+    const createResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          assetId: "asset-expected",
+        }),
+      }),
+      env,
+      createCtx(),
+    );
+    const createPayload = (await createResponse.json()) as { intentId: string };
+    const repository = createFactsRepository(env);
+    const intent = await repository.getConnectIntentById(createPayload.intentId);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: "access-token-1",
+            refresh_token: "refresh-token-1",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "provider-1",
+            mail: "ops@example.com",
+            displayName: "Ops",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const callbackResponse = await handleRequest(
+      new Request(
+        `https://example.com/oauth/outlook/callback?state=${encodeURIComponent(intent!.stateNonce)}&code=code-1`,
+      ),
+      env,
+      createCtx(),
+    );
+    expect(callbackResponse.status).toBe(302);
+    expect((await repository.getConnectIntentById(createPayload.intentId))?.status).toBe("completed");
+    expect(await repository.getMailboxAccount("provider-1")).toMatchObject({
+      mailboxId: "provider-1",
+      emailAddress: "ops@example.com",
+      providerAccountId: "provider-1",
+      authStatus: "active",
+    });
+  });
+
+  it("connect callback onboard 失败时不会把邮箱误报为 active", async () => {
+    const env = createEnv({
+      MAILBOX_COORDINATOR: {
+        idFromName(name: string) {
+          return name as unknown as DurableObjectId;
+        },
+        get(id: DurableObjectId) {
+          return {
+            async fetch(request: Request) {
+              const path = new URL(request.url).pathname;
+              if (path === "/commands/onboard") {
+                return new Response("boom", { status: 500 });
+              }
+
+              return new Response(JSON.stringify({ mailboxId: String(id), path }), {
+                status: 201,
+                headers: {
+                  "content-type": "application/json",
+                },
+              });
+            },
+          } as DurableObjectStub;
+        },
+      } as DurableObjectNamespace,
+    });
+    const createResponse = await handleRequest(
+      new Request("https://example.com/api/mailboxes/connect-intents", {
+        method: "POST",
+        headers: {
+          ...createOperatorHeaders(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      }),
+      env,
+      createCtx(),
+    );
+    const createPayload = (await createResponse.json()) as { intentId: string };
+    const repository = createFactsRepository(env);
+    const intent = await repository.getConnectIntentById(createPayload.intentId);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: "access-token-1",
+            refresh_token: "refresh-token-1",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "provider-1",
+            mail: "ops@example.com",
+            displayName: "Ops",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleRequest(
+      new Request(
+        `https://example.com/oauth/outlook/callback?state=${encodeURIComponent(intent!.stateNonce)}&code=code-1`,
+      ),
+      env,
+      createCtx(),
+    );
+
+    expect((await repository.getConnectIntentById(createPayload.intentId))?.status).toBe("failed");
+    expect((await repository.getMailboxAccount("provider-1"))?.authStatus).toBe("pending_auth");
+  });
+
   it("reauthorize 会把邮箱置为 pending_auth，并在 callback 成功后恢复 active", async () => {
     const env = createEnv();
     const repository = createFactsRepository(env);
@@ -257,9 +598,9 @@ describe("OAuth routes", () => {
     const startResponse = await handleRequest(
       new Request("https://example.com/api/mailboxes/provider-1/reauthorize", {
         method: "POST",
-        headers: {
+        headers: createOperatorHeaders({
           "content-type": "application/json",
-        },
+        }),
         body: JSON.stringify({
           redirectAfter: "/mailboxes/provider-1",
         }),
@@ -332,6 +673,9 @@ describe("OAuth routes", () => {
     const resultResponse = await handleRequest(
       new Request(
         `https://example.com/connect/result?intentId=${encodeURIComponent(payload.intentId)}`,
+        {
+          headers: createOperatorHeaders(),
+        },
       ),
       env,
       createCtx(),
@@ -353,9 +697,9 @@ describe("OAuth routes", () => {
     const startResponse = await handleRequest(
       new Request("https://example.com/api/mailboxes/provider-1/reauthorize", {
         method: "POST",
-        headers: {
+        headers: createOperatorHeaders({
           "content-type": "application/json",
-        },
+        }),
         body: JSON.stringify({}),
       }),
       env,
@@ -378,6 +722,17 @@ describe("OAuth routes", () => {
     expect((await repository.getMailboxAccount("provider-1"))?.authStatus).toBe(
       "reauth_required",
     );
+  });
+
+  it("connect result 未授权时返回 401 basic auth challenge", async () => {
+    const response = await handleRequest(
+      new Request("https://example.com/connect/result?intentId=intent-1"),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toContain("Basic");
   });
 
   it("旧的 public /api/mailboxes 路由已经不存在", async () => {

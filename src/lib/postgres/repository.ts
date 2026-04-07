@@ -27,6 +27,7 @@ import {
   EXPIRE_CONNECT_INTENT_SQL,
   FAIL_CONNECT_INTENT_SQL,
   GET_CONNECT_INTENT_BY_ID_SQL,
+  GET_LATEST_CONNECT_INTENT_BY_ASSET_ID_SQL,
   GET_CONNECT_INTENT_BY_STATE_NONCE_SQL,
   GET_CURRENT_SIGNAL_SQL,
   GET_HIT_EVENT_BY_DEDUPE_KEY_SQL,
@@ -92,7 +93,7 @@ interface ConnectIntentRow {
   id: string;
   status: ConnectIntent["status"];
   mode: ConnectIntent["mode"];
-  mailbox_label: string | null;
+  asset_id: string | null;
   target_mailbox_id: string | null;
   state_nonce: string;
   pkce_code_verifier: string;
@@ -283,7 +284,7 @@ function mapConnectIntent(row: ConnectIntentRow): ConnectIntent {
     id: row.id,
     status: row.status,
     mode: row.mode,
-    mailboxLabel: row.mailbox_label,
+    assetId: row.asset_id,
     targetMailboxId: row.target_mailbox_id,
     stateNonce: row.state_nonce,
     pkceCodeVerifier: row.pkce_code_verifier,
@@ -476,9 +477,9 @@ export class PostgresFactsRepository implements FactsRepository {
 
   async createConnectIntent(input: {
     mode: ConnectIntent["mode"];
-    mailboxLabel?: string;
-    redirectAfter?: string;
+    assetId?: string | null;
     targetMailboxId?: string | null;
+    redirectAfter?: string;
     expiresAt: string;
     stateNonce: string;
     pkceCodeVerifier: string;
@@ -488,7 +489,7 @@ export class PostgresFactsRepository implements FactsRepository {
       crypto.randomUUID(),
       "pending",
       input.mode,
-      input.mailboxLabel?.trim() || null,
+      input.assetId ?? null,
       input.targetMailboxId ?? null,
       input.stateNonce,
       input.pkceCodeVerifier,
@@ -518,6 +519,17 @@ export class PostgresFactsRepository implements FactsRepository {
     const result = await this.driver.query<ConnectIntentRow>(
       GET_CONNECT_INTENT_BY_STATE_NONCE_SQL,
       [stateNonce],
+    );
+    const row = result.rows[0];
+    return row ? mapConnectIntent(row) : null;
+  }
+
+  async getLatestConnectIntentByAssetId(
+    assetId: string,
+  ): Promise<ConnectIntent | null> {
+    const result = await this.driver.query<ConnectIntentRow>(
+      GET_LATEST_CONNECT_INTENT_BY_ASSET_ID_SQL,
+      [assetId],
     );
     const row = result.rows[0];
     return row ? mapConnectIntent(row) : null;

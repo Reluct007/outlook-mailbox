@@ -34,8 +34,15 @@ export function html(body: string, init: ResponseInit = {}): Response {
   });
 }
 
-export async function readJson<T>(request: Request): Promise<T> {
-  return (await request.json()) as T;
+export async function readJson<T>(
+  request: Request,
+  invalidJsonMessage = "request body must be valid JSON",
+): Promise<T> {
+  try {
+    return (await request.json()) as T;
+  } catch {
+    throw badRequest(invalidJsonMessage);
+  }
 }
 
 export function methodNotAllowed(allowed: string[]): Response {
@@ -58,6 +65,19 @@ export function badRequest(message: string, details?: unknown): Response {
       details: details ?? null,
     },
     { status: 400 },
+  );
+}
+
+export function unauthorized(message = "unauthorized", init: ResponseInit = {}): Response {
+  return json(
+    {
+      error: "unauthorized",
+      message,
+    },
+    {
+      status: 401,
+      ...init,
+    },
   );
 }
 

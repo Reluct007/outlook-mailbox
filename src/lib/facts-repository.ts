@@ -199,15 +199,18 @@ function validateParseArtifacts(input: SaveParseArtifactsInput): void {
 export interface FactsRepository {
   createConnectIntent(input: {
     mode: ConnectIntent["mode"];
-    mailboxLabel?: string;
-    redirectAfter?: string;
+    assetId?: string | null;
     targetMailboxId?: string | null;
+    redirectAfter?: string;
     expiresAt: string;
     stateNonce: string;
     pkceCodeVerifier: string;
   }): Promise<ConnectIntent>;
   getConnectIntentById(intentId: string): Promise<ConnectIntent | null>;
   getConnectIntentByStateNonce(stateNonce: string): Promise<ConnectIntent | null>;
+  getLatestConnectIntentByAssetId(
+    assetId: string,
+  ): Promise<ConnectIntent | null>;
   completeConnectIntent(input: {
     intentId: string;
     targetMailboxId: string;
@@ -290,9 +293,9 @@ class MemoryFactsRepository implements FactsRepository {
   }
   async createConnectIntent(input: {
     mode: ConnectIntent["mode"];
-    mailboxLabel?: string;
-    redirectAfter?: string;
+    assetId?: string | null;
     targetMailboxId?: string | null;
+    redirectAfter?: string;
     expiresAt: string;
     stateNonce: string;
     pkceCodeVerifier: string;
@@ -302,7 +305,7 @@ class MemoryFactsRepository implements FactsRepository {
       id: crypto.randomUUID(),
       status: "pending",
       mode: input.mode,
-      mailboxLabel: input.mailboxLabel?.trim() || null,
+      assetId: input.assetId ?? null,
       targetMailboxId: input.targetMailboxId ?? null,
       stateNonce: input.stateNonce,
       pkceCodeVerifier: input.pkceCodeVerifier,
@@ -327,6 +330,16 @@ class MemoryFactsRepository implements FactsRepository {
   async getConnectIntentByStateNonce(stateNonce: string): Promise<ConnectIntent | null> {
     const intentId = getMemoryFactsStore().connectIntentIdsByStateNonce.get(stateNonce);
     return intentId ? this.getConnectIntentById(intentId) : null;
+  }
+
+  async getLatestConnectIntentByAssetId(
+    assetId: string,
+  ): Promise<ConnectIntent | null> {
+    const intents = Array.from(getMemoryFactsStore().connectIntents.values())
+      .filter((intent) => intent.assetId === assetId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+
+    return intents[0] ?? null;
   }
 
   async completeConnectIntent(input: {
@@ -492,6 +505,11 @@ class MemoryFactsRepository implements FactsRepository {
     expirationDateTime: string | null;
   }): Promise<MailboxSubscriptionFact> {
     const store = getMemoryFactsStore();
+    const existing = store.subscriptionsByMailboxId.get(input.mailboxId);
+    if (existing && existing.subscriptionId !== input.subscriptionId) {
+      store.subscriptionsById.delete(existing.subscriptionId);
+    }
+
     const nextValue: MailboxSubscriptionFact = {
       mailboxId: input.mailboxId,
       subscriptionId: input.subscriptionId,

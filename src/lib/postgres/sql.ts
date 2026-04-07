@@ -49,7 +49,7 @@ export const INSERT_CONNECT_INTENT_SQL = `
     id,
     status,
     mode,
-    mailbox_label,
+    asset_id,
     target_mailbox_id,
     state_nonce,
     pkce_code_verifier,
@@ -61,19 +61,27 @@ export const INSERT_CONNECT_INTENT_SQL = `
     updated_at
   )
   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL, $10, $11)
-  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  RETURNING id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
 `;
 
 export const GET_CONNECT_INTENT_BY_ID_SQL = `
-  SELECT id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  SELECT id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
   FROM oauth_connect_intents
   WHERE id = $1
 `;
 
 export const GET_CONNECT_INTENT_BY_STATE_NONCE_SQL = `
-  SELECT id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  SELECT id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
   FROM oauth_connect_intents
   WHERE state_nonce = $1
+`;
+
+export const GET_LATEST_CONNECT_INTENT_BY_ASSET_ID_SQL = `
+  SELECT id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  FROM oauth_connect_intents
+  WHERE asset_id = $1
+  ORDER BY created_at DESC
+  LIMIT 1
 `;
 
 export const COMPLETE_CONNECT_INTENT_SQL = `
@@ -85,7 +93,7 @@ export const COMPLETE_CONNECT_INTENT_SQL = `
     failure_reason = NULL,
     updated_at = $4
   WHERE id = $1
-  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  RETURNING id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
 `;
 
 export const FAIL_CONNECT_INTENT_SQL = `
@@ -95,7 +103,7 @@ export const FAIL_CONNECT_INTENT_SQL = `
     failure_reason = $2,
     updated_at = $3
   WHERE id = $1
-  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  RETURNING id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
 `;
 
 export const EXPIRE_CONNECT_INTENT_SQL = `
@@ -104,7 +112,7 @@ export const EXPIRE_CONNECT_INTENT_SQL = `
     status = 'expired',
     updated_at = $2
   WHERE id = $1
-  RETURNING id, status, mode, mailbox_label, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
+  RETURNING id, status, mode, asset_id, target_mailbox_id, state_nonce, pkce_code_verifier, redirect_after, expires_at, completed_at, failure_reason, created_at, updated_at
 `;
 
 export const UPSERT_MAILBOX_CREDENTIAL_SQL = `

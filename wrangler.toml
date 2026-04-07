@@ -5,21 +5,12 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 PHASE0_STORAGE_MODE = "postgres"
-PHASE0_POSTGRES_URL = ""
 PHASE0_GRAPH_MODE = "real"
 PHASE0_AUTH_MODE = "real"
 PHASE0_DELAY_THRESHOLD_MS = "300000"
 PHASE0_DEDUPE_TTL_MS = "600000"
-OUTLOOK_WEBHOOK_NOTIFICATION_URL = ""
-OUTLOOK_WEBHOOK_CLIENT_STATE = ""
-OUTLOOK_OAUTH_CLIENT_ID = ""
-OUTLOOK_OAUTH_CLIENT_SECRET = ""
 OUTLOOK_OAUTH_AUTHORITY = "consumers"
-OUTLOOK_OAUTH_REDIRECT_URI = ""
-OUTLOOK_OAUTH_AUTHORIZE_URL = ""
-OUTLOOK_OAUTH_TOKEN_URL = ""
-OUTLOOK_OAUTH_SCOPES = "offline_access openid profile email https://graph.microsoft.com/Mail.Read"
-OUTLOOK_CREDENTIAL_ENCRYPTION_KEY = ""
+OUTLOOK_OAUTH_SCOPES = "offline_access openid profile email User.Read https://graph.microsoft.com/Mail.Read"
 
 # Runtime postgres config rules:
 # 1. Prefer PHASE0_POSTGRES_URL for direct connection-string setup
@@ -40,31 +31,31 @@ new_sqlite_classes = ["MailboxCoordinator"]
 
 [[queues.producers]]
 binding = "MAIL_FETCH_QUEUE"
-queue = "mail.fetch"
+queue = "mail-fetch"
 
 [[queues.producers]]
 binding = "MAIL_PARSE_QUEUE"
-queue = "mail.parse"
+queue = "mail-parse"
 
 [[queues.producers]]
 binding = "MAIL_RECOVER_QUEUE"
-queue = "mail.recover"
+queue = "mail-recover"
 
 [[queues.producers]]
 binding = "SUBSCRIPTION_RENEW_QUEUE"
-queue = "subscription.renew"
+queue = "subscription-renew"
 
 [[queues.consumers]]
-queue = "mail.fetch"
+queue = "mail-fetch"
 
 [[queues.consumers]]
-queue = "mail.parse"
+queue = "mail-parse"
 
 [[queues.consumers]]
-queue = "mail.recover"
+queue = "mail-recover"
 
 [[queues.consumers]]
-queue = "subscription.renew"
+queue = "subscription-renew"
 
 [[r2_buckets]]
 binding = "MESSAGE_BLOB_BUCKET"

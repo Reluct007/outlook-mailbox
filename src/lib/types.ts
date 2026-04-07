@@ -356,7 +356,7 @@ export interface ConnectIntent {
   id: string;
   status: ConnectIntentStatus;
   mode: ConnectIntentMode;
-  mailboxLabel: string | null;
+  assetId: string | null;
   targetMailboxId: string | null;
   stateNonce: string;
   pkceCodeVerifier: string;
@@ -369,8 +369,9 @@ export interface ConnectIntent {
 }
 
 export interface CreateConnectIntentRequest {
-  mailboxLabel?: string;
+  assetId?: string;
   redirectAfter?: string;
+  supersedeCurrent?: boolean;
 }
 
 export interface OutlookProfile {
@@ -457,4 +458,6 @@ export interface Phase0Env {
   OUTLOOK_OAUTH_TOKEN_URL?: string;
   OUTLOOK_OAUTH_SCOPES?: string;
   OUTLOOK_CREDENTIAL_ENCRYPTION_KEY?: string;
+  PHASE0_OPERATOR_USERNAME?: string;
+  PHASE0_OPERATOR_PASSWORD?: string;
 }
