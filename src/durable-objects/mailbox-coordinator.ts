@@ -1,3 +1,4 @@
+import { DurableObject } from "cloudflare:workers";
 import {
   createMailFetchJob,
   createMailRecoverJob,
@@ -16,6 +17,7 @@ import {
   transitionLifecycle,
 } from "../lib/state-machine";
 import { badRequest, json, methodNotAllowed, notFound } from "../lib/http";
+import { readJsonObject } from "../lib/request-guards";
 import type {
   MailboxCoordinatorSnapshot,
   Phase0Env,
@@ -41,13 +43,24 @@ async function saveSnapshot(
   await state.storage.put(SNAPSHOT_KEY, snapshot);
 }
 
-export class MailboxCoordinator {
-  constructor(
-    private readonly state: DurableObjectState,
-    private readonly env: Phase0Env,
-  ) {}
+export class MailboxCoordinator extends DurableObject<Phase0Env> {
+  constructor(state: DurableObjectState, env: Phase0Env) {
+    super(state, env);
+  }
 
   async fetch(request: Request): Promise<Response> {
+    try {
+      return await this.fetchInner(request);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error;
+      }
+
+      throw error;
+    }
+  }
+
+  private async fetchInner(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/snapshot") {
@@ -55,7 +68,7 @@ export class MailboxCoordinator {
         return methodNotAllowed(["GET"]);
       }
 
-      const snapshot = await loadSnapshot(this.state);
+      const snapshot = await loadSnapshot(this.ctx);
       return snapshot ? json(snapshot) : notFound("mailbox_not_initialized");
     }
 
@@ -64,16 +77,17 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as { mailboxId?: string };
-      if (!body.mailboxId) {
+      const body = await readJsonObject(request, "onboard command body must be valid JSON");
+      if (typeof body.mailboxId !== "string" || !body.mailboxId.trim()) {
         return badRequest("mailboxId is required");
       }
+      const mailboxId = body.mailboxId.trim();
 
-      const existing = await loadSnapshot(this.state);
+      const existing = await loadSnapshot(this.ctx);
       let snapshot =
-        existing ?? createInitialMailboxSnapshot(body.mailboxId);
+        existing ?? createInitialMailboxSnapshot(mailboxId);
       snapshot = nextSubscriptionVersion(snapshot);
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
       await this.env.SUBSCRIPTION_RENEW_QUEUE.send(
         createSubscriptionRenewJob({ mailbox: snapshot }),
       );
@@ -86,7 +100,10 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as {
+      const body = (await readJsonObject(
+        request,
+        "webhook command body must be valid JSON",
+      )) as {
         mailboxId?: string;
         events?: RoutedWebhookNotification[];
       };
@@ -95,7 +112,7 @@ export class MailboxCoordinator {
         return badRequest("mailboxId and events are required");
       }
 
-      let snapshot = await loadSnapshot(this.state);
+      let snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -185,7 +202,7 @@ export class MailboxCoordinator {
         });
       }
 
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
       return json({
         mailboxId: body.mailboxId,
         results,
@@ -198,12 +215,15 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as { mailboxId?: string; reason?: string };
+      const body = (await readJsonObject(
+        request,
+        "start recovery command body must be valid JSON",
+      )) as { mailboxId?: string; reason?: string };
       if (!body.mailboxId) {
         return badRequest("mailboxId is required");
       }
 
-      const snapshot = await loadSnapshot(this.state);
+      const snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -211,7 +231,7 @@ export class MailboxCoordinator {
       const nextSnapshot = startRecovery(snapshot, {
         errorSummary: body.reason ?? "manual recovery",
       });
-      await saveSnapshot(this.state, nextSnapshot);
+      await saveSnapshot(this.ctx, nextSnapshot);
       await this.env.MAIL_RECOVER_QUEUE.send(
         createMailRecoverJob({ mailbox: nextSnapshot }),
       );
@@ -224,7 +244,10 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as {
+      const body = (await readJsonObject(
+        request,
+        "recovery finished body must be valid JSON",
+      )) as {
         recoveryGeneration?: number;
         cursorGeneration?: number;
         expectedCurrentCursor?: string | null;
@@ -232,7 +255,7 @@ export class MailboxCoordinator {
         resetCursor?: boolean;
       };
 
-      let snapshot = await loadSnapshot(this.state);
+      let snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -248,7 +271,7 @@ export class MailboxCoordinator {
 
       if (!versionCheck.accepted) {
         snapshot = recordStaleReject(snapshot);
-        await saveSnapshot(this.state, snapshot);
+        await saveSnapshot(this.ctx, snapshot);
         return json(
           {
             accepted: false,
@@ -284,7 +307,7 @@ export class MailboxCoordinator {
       snapshot = transitionLifecycle(snapshot, "healthy", {
         errorSummary: null,
       }).snapshot;
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
 
       return json({
         accepted: true,
@@ -297,8 +320,11 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as { queueLagMs?: number };
-      let snapshot = await loadSnapshot(this.state);
+      const body = (await readJsonObject(
+        request,
+        "fetch finished body must be valid JSON",
+      )) as { queueLagMs?: number };
+      let snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -313,7 +339,7 @@ export class MailboxCoordinator {
         }).snapshot;
       }
 
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
       return json(snapshot);
     }
 
@@ -322,12 +348,15 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as {
+      const body = (await readJsonObject(
+        request,
+        "auth failed body must be valid JSON",
+      )) as {
         reauthRequired?: boolean;
         errorSummary?: string | null;
       };
 
-      let snapshot = await loadSnapshot(this.state);
+      let snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -340,7 +369,7 @@ export class MailboxCoordinator {
         },
       ).snapshot;
 
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
       return json(snapshot);
     }
 
@@ -349,7 +378,10 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      const body = (await request.json()) as {
+      const body = (await readJsonObject(
+        request,
+        "renew finished body must be valid JSON",
+      )) as {
         subscriptionVersion?: number;
         subscriptionId?: string | null;
         expirationDateTime?: string | null;
@@ -358,7 +390,7 @@ export class MailboxCoordinator {
         errorSummary?: string | null;
       };
 
-      let snapshot = await loadSnapshot(this.state);
+      let snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -374,7 +406,7 @@ export class MailboxCoordinator {
 
       if (!versionCheck.accepted) {
         snapshot = recordStaleReject(snapshot);
-        await saveSnapshot(this.state, snapshot);
+        await saveSnapshot(this.ctx, snapshot);
         return json(
           {
             accepted: false,
@@ -405,7 +437,7 @@ export class MailboxCoordinator {
         }).snapshot;
       }
 
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
       return json(snapshot);
     }
 
@@ -414,7 +446,7 @@ export class MailboxCoordinator {
         return methodNotAllowed(["POST"]);
       }
 
-      let snapshot = await loadSnapshot(this.state);
+      let snapshot = await loadSnapshot(this.ctx);
       if (!snapshot) {
         return notFound("mailbox_not_initialized");
       }
@@ -455,7 +487,7 @@ export class MailboxCoordinator {
         );
       }
 
-      await saveSnapshot(this.state, snapshot);
+      await saveSnapshot(this.ctx, snapshot);
       return json(snapshot);
     }
 

@@ -150,6 +150,7 @@ export function renderOtpPanelPage(): string {
         color: var(--ink);
         padding: 12px 16px;
         cursor: pointer;
+        text-decoration: none;
         transition:
           transform 180ms ease,
           background-color 180ms ease,
@@ -660,6 +661,7 @@ export function renderOtpPanelPage(): string {
         </div>
         <div class="controls">
           <div class="pill" id="status-pill">Syncing panel...</div>
+          <a class="action" href="/connect/outlook">OAuth launcher</a>
           <button class="action" id="refresh-button" type="button">Refresh</button>
         </div>
       </header>

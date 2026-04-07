@@ -46,6 +46,14 @@ function createEnv(): Phase0Env {
     PHASE0_STORAGE_MODE: "memory",
     PHASE0_GRAPH_MODE: "mock",
     PHASE0_AUTH_MODE: "mock",
+    PHASE0_OPERATOR_USERNAME: "operator",
+    PHASE0_OPERATOR_PASSWORD: "test-password",
+  };
+}
+
+function createOperatorHeaders(): Record<string, string> {
+  return {
+    authorization: "Basic " + btoa("operator:test-password"),
   };
 }
 
@@ -60,7 +68,9 @@ function createCtx(): ExecutionContext {
 describe("otp panel page", () => {
   it("根路径返回 html 页面，并内置 otp panel 数据加载脚本", async () => {
     const response = await handleRequest(
-      new Request("https://example.com/"),
+      new Request("https://example.com/", {
+        headers: createOperatorHeaders(),
+      }),
       createEnv(),
       createCtx(),
     );
@@ -72,5 +82,16 @@ describe("otp panel page", () => {
     expect(body).toContain("OTP Panel");
     expect(body).toContain("/api/otp-panel");
     expect(body).toContain("copy-button");
+  });
+
+  it("根路径未授权时返回 401 basic auth challenge", async () => {
+    const response = await handleRequest(
+      new Request("https://example.com/"),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toContain("Basic");
   });
 });

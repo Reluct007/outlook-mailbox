@@ -65,6 +65,17 @@ function createEnv(
     PHASE0_STORAGE_MODE: "memory",
     PHASE0_GRAPH_MODE: "mock",
     PHASE0_AUTH_MODE: "mock",
+    PHASE0_OPERATOR_USERNAME: "operator",
+    PHASE0_OPERATOR_PASSWORD: "test-password",
+  };
+}
+
+function createOperatorHeaders(
+  headers: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    authorization: "Basic " + btoa("operator:test-password"),
+    ...headers,
   };
 }
 
@@ -164,7 +175,9 @@ describe("handleRequest otp panel", () => {
     });
 
     const response = await handleRequest(
-      new Request("https://example.com/api/otp-panel"),
+      new Request("https://example.com/api/otp-panel", {
+        headers: createOperatorHeaders(),
+      }),
       env,
       createCtx(),
     );
@@ -204,7 +217,9 @@ describe("handleRequest otp panel", () => {
     });
 
     const response = await handleRequest(
-      new Request("https://example.com/api/otp-panel"),
+      new Request("https://example.com/api/otp-panel", {
+        headers: createOperatorHeaders(),
+      }),
       env,
       createCtx(),
     );
@@ -234,7 +249,9 @@ describe("handleRequest otp panel", () => {
     });
 
     const response = await handleRequest(
-      new Request("https://example.com/api/otp-panel"),
+      new Request("https://example.com/api/otp-panel", {
+        headers: createOperatorHeaders(),
+      }),
       env,
       createCtx(),
     );
@@ -282,7 +299,9 @@ describe("handleRequest otp panel", () => {
     });
 
     const response = await handleRequest(
-      new Request("https://example.com/api/otp-panel"),
+      new Request("https://example.com/api/otp-panel", {
+        headers: createOperatorHeaders(),
+      }),
       env,
       createCtx(),
     );
@@ -306,7 +325,9 @@ describe("handleRequest otp panel", () => {
 
   it("没有 mailbox 时返回 empty", async () => {
     const response = await handleRequest(
-      new Request("https://example.com/api/otp-panel"),
+      new Request("https://example.com/api/otp-panel", {
+        headers: createOperatorHeaders(),
+      }),
       createEnv(),
       createCtx(),
     );

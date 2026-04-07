@@ -128,7 +128,7 @@ describe("postgres facts repository", () => {
 
     const intent = await repository.createConnectIntent({
       mode: "connect",
-      mailboxLabel: "ops-mailbox",
+      assetId: "provider-1",
       redirectAfter: "/done",
       expiresAt: "2026-04-08T00:00:00.000Z",
       stateNonce: "state-1",
@@ -140,7 +140,7 @@ describe("postgres facts repository", () => {
     ).toMatchObject({
       id: intent.id,
       status: "pending",
-      mailboxLabel: "ops-mailbox",
+      assetId: "provider-1",
     });
 
     await repository.upsertMailboxAccount({

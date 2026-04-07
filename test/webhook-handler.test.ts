@@ -2,6 +2,7 @@ import { createFactsRepository, resetMemoryFactsRepository } from "../src/lib/fa
 import { resetMemoryBlobStore } from "../src/lib/blob-store";
 import { handleRequest } from "../src/index";
 import type { Phase0Env } from "../src/lib/types";
+import { vi } from "vitest";
 
 function createEnv(overrides: Partial<Phase0Env> = {}): Phase0Env {
   return {
@@ -125,5 +126,61 @@ describe("handleRequest webhook ingress", () => {
     };
     expect(payload.accepted).toHaveLength(0);
     expect(payload.rejected[0]?.reason).toBe("client_state_mismatch");
+  });
+
+  it("空 webhook payload 会返回 400", async () => {
+    const response = await handleRequest(
+      new Request("https://example.com/api/webhooks/outlook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          value: [],
+        }),
+      }),
+      createEnv(),
+      createCtx(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "bad_request",
+    });
+  });
+
+  it("全部事件被拒绝时不会写入 blob store", async () => {
+    const put = vi.fn(async () => undefined);
+    const env = createEnv({
+      MESSAGE_BLOB_BUCKET: {
+        put,
+      } as unknown as R2Bucket,
+    });
+
+    const response = await handleRequest(
+      new Request("https://example.com/api/webhooks/outlook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          value: [
+            {
+              subscriptionId: "missing-subscription",
+              clientState: "any-client-state",
+              changeType: "created",
+              resourceData: {
+                id: "message-1",
+              },
+            },
+          ],
+        }),
+      }),
+      env,
+      createCtx(),
+    );
+
+    expect(response.status).toBe(202);
+    expect(put).not.toHaveBeenCalled();
   });
 });
