@@ -32,14 +32,25 @@ function buildMockMessage(
 export class OutlookGraphClient {
   constructor(private readonly env: Phase0Env) {}
 
+  private getGraphBaseUrl(): string {
+    return this.env.GRAPH_BASE_URL ?? "https://graph.microsoft.com/v1.0";
+  }
+
+  private getRequiredNotificationUrl(): string {
+    const notificationUrl = this.env.OUTLOOK_WEBHOOK_NOTIFICATION_URL?.trim();
+    if (!notificationUrl) {
+      throw new Error("outlook_webhook_notification_url_missing");
+    }
+
+    return notificationUrl;
+  }
+
   async ensureSubscription(input: {
     mailbox: MailboxAccountFact;
     clientState: string;
+    accessToken: string | null;
   }): Promise<OutlookSubscriptionResult> {
-    if (
-      this.env.PHASE0_GRAPH_MODE === "mock" ||
-      !this.env.OUTLOOK_GRAPH_ACCESS_TOKEN
-    ) {
+    if (this.env.PHASE0_GRAPH_MODE === "mock") {
       return {
         subscriptionId: `mock-sub:${input.mailbox.mailboxId}`,
         expirationDateTime: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
@@ -47,18 +58,25 @@ export class OutlookGraphClient {
       };
     }
 
+    if (!input.accessToken) {
+      throw new Error("graph_access_token_missing");
+    }
+
+    const notificationUrl = this.getRequiredNotificationUrl();
+
     const url = new URL(
-      `${this.env.GRAPH_BASE_URL ?? "https://graph.microsoft.com/v1.0"}/subscriptions`,
+      `${this.getGraphBaseUrl()}/subscriptions`,
     );
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.env.OUTLOOK_GRAPH_ACCESS_TOKEN}`,
+        authorization: `Bearer ${input.accessToken}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({
         changeType: "created",
-        notificationUrl: "https://example.com/api/webhooks/outlook",
+        notificationUrl,
+        lifecycleNotificationUrl: notificationUrl,
         resource: `/users/${input.mailbox.graphUserId}/mailFolders('Inbox')/messages`,
         expirationDateTime: new Date(
           Date.now() + 30 * 60 * 1000,
@@ -87,16 +105,18 @@ export class OutlookGraphClient {
   async fetchMessage(input: {
     mailbox: MailboxAccountFact;
     messageId: string;
+    accessToken: string | null;
   }): Promise<OutlookGraphMessage> {
-    if (
-      this.env.PHASE0_GRAPH_MODE === "mock" ||
-      !this.env.OUTLOOK_GRAPH_ACCESS_TOKEN
-    ) {
+    if (this.env.PHASE0_GRAPH_MODE === "mock") {
       return buildMockMessage(input.mailbox, input.messageId);
     }
 
+    if (!input.accessToken) {
+      throw new Error("graph_access_token_missing");
+    }
+
     const url = new URL(
-      `${this.env.GRAPH_BASE_URL ?? "https://graph.microsoft.com/v1.0"}/users/${encodeURIComponent(input.mailbox.graphUserId)}/messages/${encodeURIComponent(input.messageId)}`,
+      `${this.getGraphBaseUrl()}/users/${encodeURIComponent(input.mailbox.graphUserId)}/messages/${encodeURIComponent(input.messageId)}`,
     );
     url.searchParams.set(
       "$select",
@@ -115,7 +135,7 @@ export class OutlookGraphClient {
 
     const response = await fetch(url, {
       headers: {
-        authorization: `Bearer ${this.env.OUTLOOK_GRAPH_ACCESS_TOKEN}`,
+        authorization: `Bearer ${input.accessToken}`,
       },
     });
 
@@ -165,11 +185,9 @@ export class OutlookGraphClient {
   async recoverMessages(input: {
     mailbox: MailboxAccountFact;
     currentCursor: string | null;
+    accessToken: string | null;
   }): Promise<OutlookDeltaResult> {
-    if (
-      this.env.PHASE0_GRAPH_MODE === "mock" ||
-      !this.env.OUTLOOK_GRAPH_ACCESS_TOKEN
-    ) {
+    if (this.env.PHASE0_GRAPH_MODE === "mock") {
       return {
         messages: [buildMockMessage(input.mailbox, `recover-${Date.now()}`)],
         nextCursor: `mock-delta:${Date.now()}`,
@@ -177,15 +195,19 @@ export class OutlookGraphClient {
       };
     }
 
+    if (!input.accessToken) {
+      throw new Error("graph_access_token_missing");
+    }
+
     const url = input.currentCursor
       ? new URL(input.currentCursor)
       : new URL(
-          `${this.env.GRAPH_BASE_URL ?? "https://graph.microsoft.com/v1.0"}/users/${encodeURIComponent(input.mailbox.graphUserId)}/mailFolders('Inbox')/messages/delta`,
+          `${this.getGraphBaseUrl()}/users/${encodeURIComponent(input.mailbox.graphUserId)}/mailFolders('Inbox')/messages/delta`,
         );
 
     const response = await fetch(url, {
       headers: {
-        authorization: `Bearer ${this.env.OUTLOOK_GRAPH_ACCESS_TOKEN}`,
+        authorization: `Bearer ${input.accessToken}`,
       },
     });
 

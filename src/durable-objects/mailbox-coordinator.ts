@@ -317,6 +317,33 @@ export class MailboxCoordinator {
       return json(snapshot);
     }
 
+    if (url.pathname === "/jobs/auth-failed") {
+      if (request.method !== "POST") {
+        return methodNotAllowed(["POST"]);
+      }
+
+      const body = (await request.json()) as {
+        reauthRequired?: boolean;
+        errorSummary?: string | null;
+      };
+
+      let snapshot = await loadSnapshot(this.state);
+      if (!snapshot) {
+        return notFound("mailbox_not_initialized");
+      }
+
+      snapshot = transitionLifecycle(
+        snapshot,
+        body.reauthRequired ? "reauth_required" : "delayed",
+        {
+          errorSummary: body.errorSummary ?? "auth failed",
+        },
+      ).snapshot;
+
+      await saveSnapshot(this.state, snapshot);
+      return json(snapshot);
+    }
+
     if (url.pathname === "/jobs/renew-finished") {
       if (request.method !== "POST") {
         return methodNotAllowed(["POST"]);
