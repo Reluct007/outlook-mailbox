@@ -166,35 +166,95 @@ export const CSS_LAYOUT = `
 `;
 
 export const CSS_NAV = `
-  .topbar {
+  .app-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 14px 0;
-    margin-bottom: 28px;
+    padding: 0 24px;
+    height: 64px;
+    background: var(--bg-raised);
     border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 50;
   }
 
-  .topbar-left {
+  .app-branding {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
   }
 
-  .topbar-brand {
+  .brand-title {
     font-family: "JetBrains Mono", monospace;
     font-weight: 700;
-    font-size: 1.05rem;
+    font-size: 1.1rem;
     color: var(--text);
     letter-spacing: -0.02em;
+    margin: 0;
   }
 
-  .topbar-right {
+  .mode-switcher {
+    display: flex;
+    background: var(--bg-surface);
+    padding: 5px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .mode-tab {
+    padding: 7px 20px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-radius: calc(var(--radius-sm) - 4px);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: transparent;
+    border: none;
     display: flex;
     align-items: center;
     gap: 8px;
   }
+
+  .mode-tab:hover {
+    color: var(--text);
+  }
+
+  .mode-tab.active {
+    background: var(--bg-raised);
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+
+  [data-theme="dark"] .mode-tab.active {
+    background: var(--bg-card);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+
+  .mode-tab.active .tab-icon {
+    color: var(--accent);
+  }
+
+  .app-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .view-container {
+    display: none;
+    animation: fade-in 0.3s ease;
+  }
+
+  .view-container.active {
+    display: block;
+  }
+
 
   .status-dot {
     display: inline-flex;

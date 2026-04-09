@@ -280,19 +280,30 @@ export function renderOtpPanelPage(): string {
     <div class="sync-bar" id="sync-bar" style="width:0%"></div>
 
     <div class="shell">
-      <nav class="topbar">
-        <div class="topbar-left">
-          <span class="topbar-brand">OTP Panel</span>
+      <nav class="app-header">
+        <div class="app-branding">
+          <span class="brand-title">Outlook Mailbox</span>
           <div class="status-dot" id="status-pill">syncing</div>
         </div>
-        <div class="topbar-right">
+        
+        <div class="mode-switcher">
+          <button class="mode-tab active" data-view="otp" id="tab-otp">
+            <span class="tab-icon">⏺</span>实时大盘
+          </button>
+          <button class="mode-tab" data-view="explorer" id="tab-explorer">
+            <span class="tab-icon">🔍</span>邮件溯源
+          </button>
+        </div>
+
+        <div class="app-actions">
           <a class="nav-link" href="/connect/outlook">OAuth Launcher</a>
           <button class="nav-link" id="refresh-button" type="button">↻ Refresh</button>
           <button class="theme-toggle" id="theme-toggle" type="button" onclick="__toggleTheme()" title="切换主题">☀</button>
         </div>
       </nav>
 
-      <main class="board">
+      <div id="view-otp" class="view-container active">
+        <main class="board">
         <section class="hero">
           <div class="code-card animate-in">
             <div class="code-display-area" id="code-window">
@@ -378,7 +389,15 @@ export function renderOtpPanelPage(): string {
             <p class="list-empty" id="mailbox-health-empty">还没有 mailbox 数据</p>
           </div>
         </section>
-      </main>
+        </main>
+      </div>
+
+      <div id="view-explorer" class="view-container">
+        <div style="padding: 100px 20px; text-align: center; color: var(--text-secondary);">
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px;">🔍 邮件溯源模式正在开发中</h2>
+          <p>此页面将作为高级调试版：左侧显示时间流邮件列表，右侧安全渲染原始 HTML 正文。</p>
+        </div>
+      </div>
     </div>
 
     <script>
@@ -389,6 +408,10 @@ export function renderOtpPanelPage(): string {
       var state = { panel: null, copying: false, timer: null, cd: null, elapsed: 0 };
 
       var el = {
+        tabOtp: document.getElementById("tab-otp"),
+        tabExplorer: document.getElementById("tab-explorer"),
+        viewOtp: document.getElementById("view-otp"),
+        viewExplorer: document.getElementById("view-explorer"),
         syncBar: document.getElementById("sync-bar"),
         pill: document.getElementById("status-pill"),
         refresh: document.getElementById("refresh-button"),
@@ -448,6 +471,25 @@ export function renderOtpPanelPage(): string {
         el.syncBar.style.width = "100%";
         el.syncBar.classList.add("is-syncing");
       }
+
+      // -- Dual Mode Logic --
+      function switchView(mode) {
+        if (!el.tabOtp || !el.tabExplorer) return;
+        if (mode === "otp") {
+          el.tabOtp.classList.add("active");
+          el.tabExplorer.classList.remove("active");
+          el.viewOtp.classList.add("active");
+          el.viewExplorer.classList.remove("active");
+        } else {
+          el.tabExplorer.classList.add("active");
+          el.tabOtp.classList.remove("active");
+          el.viewExplorer.classList.add("active");
+          el.viewOtp.classList.remove("active");
+        }
+      }
+      
+      if (el.tabOtp) el.tabOtp.addEventListener("click", function() { switchView("otp"); });
+      if (el.tabExplorer) el.tabExplorer.addEventListener("click", function() { switchView("explorer"); });
 
       function setFb(t, tone) {
         el.copyFb.textContent = t;
