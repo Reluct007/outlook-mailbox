@@ -574,7 +574,7 @@ export function renderOtpPanelPage(): string {
           emailInfo.style.marginBottom = "2px";
           
           var timeInfo = document.createElement('div');
-          timeInfo.textContent = formatRelativeTime(hs.receivedAt);
+          timeInfo.textContent = hs.signalType + " · " + formatRelativeTime(hs.receivedAt);
           
           right.appendChild(emailInfo);
           right.appendChild(timeInfo);
@@ -636,7 +636,7 @@ export function renderOtpPanelPage(): string {
 
       function renderLists(p) {
         renderList(el.recentList, el.recentEmpty, p.recentCodes, function(e) {
-          return makeListItem(e.value, (e.mailboxEmailAddress || e.mailboxId) + " · " + formatRelativeTime(e.receivedAt));
+          return makeListItem(e.value, (e.mailboxEmailAddress || e.mailboxId) + " · " + e.signalType + " · " + formatRelativeTime(e.receivedAt));
         });
         renderList(el.secList, el.secEmpty, p.secondarySignals, function(e) {
           return makeListItem(e.value, e.signalType + " · " + (e.mailboxEmailAddress || e.mailboxId));
