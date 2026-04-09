@@ -89,16 +89,20 @@ export function renderConnectLauncherPage(input: {
     <style>${baseStyles()}${pageStyles()}</style>
   </head>
   <body>
-    <div class="shell shell--narrow">
-      <nav class="topbar">
-        <div class="topbar-left">
-          <span class="topbar-brand">OAuth Launcher</span>
+    <div class="shell" style="padding-bottom: 0;">
+      <nav class="app-header" style="border-bottom: none; padding-bottom: 14px; margin-bottom: 0;">
+        <div class="app-branding">
+          <span class="brand-title">OAuth Launcher</span>
         </div>
-        <div class="topbar-right">
+        
+        <div class="app-actions">
           <a class="nav-link" href="/">← OTP Panel</a>
           <button class="theme-toggle" id="theme-toggle" type="button" onclick="__toggleTheme()" title="切换主题">☀</button>
         </div>
       </nav>
+    </div>
+    
+    <div class="shell shell--narrow">
 
       <main class="board">
         <section class="main-stack">

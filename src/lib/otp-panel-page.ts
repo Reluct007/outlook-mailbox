@@ -282,7 +282,7 @@ export function renderOtpPanelPage(): string {
     <div class="shell">
       <nav class="app-header">
         <div class="app-branding">
-          <span class="brand-title">Outlook Mailbox</span>
+          <span class="brand-title">Mailbox</span>
           <div class="status-dot" id="status-pill">syncing</div>
         </div>
         
