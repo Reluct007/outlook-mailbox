@@ -288,7 +288,7 @@ export function renderOtpPanelPage(): string {
         
         <div class="mode-switcher">
           <button class="mode-tab active" data-view="otp" id="tab-otp">
-            <span class="tab-icon">⏺</span>实时大盘
+            <span class="tab-icon">⏺</span>验证码
           </button>
           <button class="mode-tab" data-view="explorer" id="tab-explorer">
             <span class="tab-icon">🔍</span>邮件溯源

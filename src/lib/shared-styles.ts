@@ -198,20 +198,21 @@ export const CSS_NAV = `
   .mode-switcher {
     display: flex;
     background: var(--bg-surface);
-    padding: 5px;
-    border-radius: var(--radius-sm);
+    padding: 4px;
+    border-radius: 99px;
     border: 1px solid var(--border);
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
+    gap: 4px;
   }
 
   .mode-tab {
-    padding: 7px 20px;
+    padding: 6px 18px;
     font-size: 0.88rem;
     font-weight: 600;
     color: var(--text-secondary);
-    border-radius: calc(var(--radius-sm) - 4px);
+    border-radius: 99px;
     cursor: pointer;
     transition: all 0.2s ease;
     background: transparent;
@@ -228,12 +229,12 @@ export const CSS_NAV = `
   .mode-tab.active {
     background: var(--bg-raised);
     color: var(--text);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   }
 
   [data-theme="dark"] .mode-tab.active {
     background: var(--bg-card);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   }
 
   .mode-tab.active .tab-icon {
@@ -288,13 +289,13 @@ export const CSS_NAV = `
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 14px;
-    border-radius: var(--radius-xs);
+    padding: 6px 14px;
+    border-radius: 99px;
     font-size: 0.85rem;
     font-weight: 500;
     color: var(--text-secondary);
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     cursor: pointer;
     transition: all var(--dur) ease;
     text-decoration: none;
@@ -303,7 +304,6 @@ export const CSS_NAV = `
   .nav-link:hover {
     color: var(--text);
     background: var(--bg-hover);
-    border-color: var(--border-strong);
   }
 
   /* theme toggle */
