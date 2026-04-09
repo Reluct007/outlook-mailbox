@@ -9,3 +9,4 @@ output/
 .DS_Store
 .dev.vars
 .dev.vars.*
+package-lock.json

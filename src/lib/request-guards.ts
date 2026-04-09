@@ -1,4 +1,5 @@
-import { badRequest, json, readJson, unauthorized } from "./http";
+import { badRequest, json, readJson, unauthorized, html } from "./http";
+import { renderLoginPage } from "./login-page";
 import type {
   CreateConnectIntentRequest,
   OutlookNotification,
@@ -6,7 +7,7 @@ import type {
   Phase0Env,
 } from "./types";
 
-const DEFAULT_OPERATOR_USERNAME = "operator";
+const DEFAULT_OPERATOR_USERNAME = "world";
 const OPERATOR_REALM = "Outlook Mailbox Operator";
 const MAX_ASSET_ID_LENGTH = 120;
 const MAX_REDIRECT_AFTER_LENGTH = 2048;
@@ -298,7 +299,13 @@ export function decodePathParam(
   }
 }
 
-function unauthorizedOperatorResponse(message: string): Response {
+function unauthorizedOperatorResponse(message: string, request: Request): Response {
+  const accept = request.headers.get("accept") || "";
+  
+  if (request.method === "GET" && accept.includes("text/html")) {
+    return html(renderLoginPage(), { status: 200 });
+  }
+
   return unauthorized(message, {
     headers: {
       "www-authenticate": `Basic realm="${OPERATOR_REALM}"`,
@@ -316,6 +323,33 @@ function decodeBasicAuthHeader(headerValue: string): {
 
   try {
     const decoded = atob(headerValue.slice("Basic ".length));
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex < 0) {
+      return null;
+    }
+
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decodeCookieAuth(request: Request): {
+  username: string;
+  password: string;
+} | null {
+  const cookieString = request.headers.get("cookie") || "";
+  const match = cookieString.match(/(?:^|;\\s*)operator_auth_token=([^;]*)/);
+  if (!match) {
+    return null;
+  }
+
+  try {
+    const rawMatch = match[1] ?? "";
+    const decoded = atob(decodeURIComponent(rawMatch));
     const separatorIndex = decoded.indexOf(":");
     if (separatorIndex < 0) {
       return null;
@@ -361,19 +395,19 @@ export function requireOperatorAuthorization(
 
   const expectedUsername =
     normalizeString(env.PHASE0_OPERATOR_USERNAME) ?? DEFAULT_OPERATOR_USERNAME;
-  const credentials = decodeBasicAuthHeader(
-    request.headers.get("authorization") ?? "",
-  );
+  const credentials =
+    decodeBasicAuthHeader(request.headers.get("authorization") ?? "") ||
+    decodeCookieAuth(request);
 
   if (!credentials) {
-    return unauthorizedOperatorResponse("operator_auth_required");
+    return unauthorizedOperatorResponse("operator_auth_required", request);
   }
 
   if (
     credentials.username !== expectedUsername ||
     credentials.password !== expectedPassword
   ) {
-    return unauthorizedOperatorResponse("operator_auth_invalid");
+    return unauthorizedOperatorResponse("operator_auth_invalid", request);
   }
 
   return null;

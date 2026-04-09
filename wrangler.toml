@@ -60,3 +60,8 @@ queue = "subscription-renew"
 [[r2_buckets]]
 binding = "MESSAGE_BLOB_BUCKET"
 bucket_name = "outlook-mailbox-phase0"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "c1b9c5b03949483c8b9e926a53cea7e6"
+

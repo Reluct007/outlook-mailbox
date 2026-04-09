@@ -1,1077 +1,676 @@
+import { baseStyles, JS_THEME_TOGGLE } from "./shared-styles";
+import { clientUtilScripts } from "./shared-scripts";
+
+function pageStyles(): string {
+  return `
+    .board {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 20px;
+      align-items: start;
+    }
+
+    /* --- hero --- */
+    .hero { display: grid; gap: 20px; }
+
+    .code-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      backdrop-filter: blur(20px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .code-card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: var(--radius);
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(0,212,170,0.2), transparent 50%, rgba(0,212,170,0.05));
+      -webkit-mask: linear-gradient(#fff 0,#fff 0) content-box, linear-gradient(#fff 0,#fff 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+
+    .code-display-area {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      min-height: 160px;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+
+    .code-display-area::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, rgba(0,212,170,0.03) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+
+
+    .code-value {
+      font-family: "JetBrains Mono", monospace;
+      font-size: clamp(2.8rem, 7vw, 5rem);
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-indent: 0.14em;
+      line-height: 1;
+      color: var(--text);
+      position: relative;
+      z-index: 1;
+    }
+
+    .code-caption {
+      display: block;
+      margin-top: 10px;
+      font-size: 0.72rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-tertiary);
+      position: relative;
+      z-index: 1;
+    }
+
+    /* skeleton */
+    .code-skel-wrap { display: grid; gap: 10px; place-items: center; }
+    .code-skel-bar { width: 65%; height: 48px; border-radius: 8px; }
+    .code-skel-line { width: 35%; height: 12px; border-radius: 6px; }
+
+    .copy-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .copy-btn {
+      appearance: none;
+      border: none;
+      width: 100%;
+      min-height: 52px;
+      border-radius: var(--radius-sm);
+      background: var(--accent);
+      color: var(--accent-text);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all var(--dur) ease;
+      box-shadow: 0 0 24px var(--accent-dim);
+    }
+
+    .copy-btn:hover:not(:disabled) {
+      background: var(--accent-hover);
+      box-shadow: 0 0 32px var(--accent-dim);
+      transform: translateY(-1px);
+    }
+
+    .copy-btn:active:not(:disabled) {
+      transform: translateY(0) scale(0.99);
+    }
+
+    .copy-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .copy-btn.is-success {
+      background: var(--success);
+      color: #fff;
+      box-shadow: 0 0 20px var(--success-dim);
+    }
+
+    .copy-btn.is-error {
+      background: var(--danger);
+      color: #fff;
+      box-shadow: 0 0 20px var(--danger-dim);
+    }
+
+    .copy-feedback {
+      font-size: 0.78rem;
+      color: var(--text-tertiary);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .copy-feedback.success { color: var(--success); }
+    .copy-feedback.error { color: var(--danger); }
+
+    /* summary */
+    .summary-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .summary-cell {
+      background: var(--bg-surface);
+      padding: 14px 16px;
+    }
+
+    .summary-label {
+      display: block;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-tertiary);
+      margin-bottom: 6px;
+    }
+
+    .summary-value {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    /* --- sidebar --- */
+    .sidebar { display: grid; gap: 16px; }
+
+    .state-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      backdrop-filter: blur(20px);
+    }
+
+    .state-card.is-ready { border-color: rgba(52,211,153,0.2); }
+    .state-card.is-waiting { border-color: rgba(251,191,36,0.2); }
+    .state-card.is-alert, .state-card.is-error { border-color: rgba(248,113,113,0.2); }
+
+    .state-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .state-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--text-tertiary);
+      flex-shrink: 0;
+    }
+
+    .state-card.is-ready .state-indicator { background: var(--success); box-shadow: 0 0 10px var(--success); }
+    .state-card.is-waiting .state-indicator { background: var(--warning); box-shadow: 0 0 10px var(--warning); }
+    .state-card.is-alert .state-indicator, .state-card.is-error .state-indicator { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
+
+    .state-label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .state-title {
+      margin: 0 0 6px;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .state-desc {
+      margin: 0;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    .state-sync {
+      margin-top: 12px;
+      font-size: 0.72rem;
+      color: var(--text-tertiary);
+    }
+
+    .sidebar-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      backdrop-filter: blur(20px);
+    }
+
+    /* mobile */
+    @media (max-width: 900px) {
+      .board { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 768px) {
+      .code-value { font-size: clamp(2rem, 12vw, 3.5rem); }
+      .code-display-area { min-height: 120px; padding: 18px; }
+      .code-card { padding: 20px; }
+      .copy-row { grid-template-columns: 1fr; }
+      .copy-feedback { text-align: left; }
+      .summary-row { grid-template-columns: 1fr 1fr 1fr; }
+    }
+  `;
+}
+
 export function renderOtpPanelPage(): string {
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>OTP Panel</title>
-    <style>
-      @import url("https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap");
-
-      :root {
-        --paper: #efe7d7;
-        --paper-strong: #e2d3b5;
-        --ink: #171411;
-        --ink-soft: rgba(23, 20, 17, 0.72);
-        --grid: rgba(23, 20, 17, 0.1);
-        --success: #0c6b3e;
-        --success-soft: rgba(12, 107, 62, 0.14);
-        --warning: #8f5b16;
-        --warning-soft: rgba(143, 91, 22, 0.14);
-        --danger: #9a2f26;
-        --danger-soft: rgba(154, 47, 38, 0.14);
-        --panel: rgba(255, 251, 245, 0.72);
-        --shadow: 0 24px 80px rgba(33, 24, 14, 0.14);
-        --radius: 24px;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      html,
-      body {
-        margin: 0;
-        min-height: 100%;
-        color: var(--ink);
-        background:
-          radial-gradient(circle at top left, rgba(255, 255, 255, 0.45), transparent 28%),
-          linear-gradient(180deg, #f6f1e8 0%, var(--paper) 45%, #e7dcc8 100%);
-      }
-
-      body {
-        font-family: "Azeret Mono", "SFMono-Regular", "Consolas", monospace;
-        position: relative;
-        overflow-x: hidden;
-      }
-
-      body::before,
-      body::after {
-        content: "";
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-      }
-
-      body::before {
-        background:
-          linear-gradient(var(--grid) 1px, transparent 1px),
-          linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-        background-size: 32px 32px;
-        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.32), transparent 82%);
-      }
-
-      body::after {
-        opacity: 0.18;
-        background-image:
-          radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.75) 0 2px, transparent 2px),
-          radial-gradient(circle at 80% 30%, rgba(23, 20, 17, 0.12) 0 1px, transparent 1px),
-          radial-gradient(circle at 40% 80%, rgba(23, 20, 17, 0.08) 0 1px, transparent 1px);
-        background-size: 160px 160px, 120px 120px, 180px 180px;
-      }
-
-      button,
-      input,
-      textarea {
-        font: inherit;
-      }
-
-      .shell {
-        width: min(1180px, calc(100vw - 32px));
-        margin: 0 auto;
-        padding: 28px 0 40px;
-      }
-
-      .masthead {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 20px;
-      }
-
-      .titleblock {
-        display: grid;
-        gap: 6px;
-      }
-
-      .eyebrow {
-        letter-spacing: 0.18em;
-        text-transform: uppercase;
-        font-size: 11px;
-        color: var(--ink-soft);
-      }
-
-      .headline {
-        font-family: "Fraunces", Georgia, serif;
-        font-size: clamp(2rem, 4.6vw, 4.1rem);
-        line-height: 0.92;
-        margin: 0;
-        letter-spacing: -0.06em;
-        max-width: 12ch;
-      }
-
-      .subhead {
-        margin: 0;
-        max-width: 46rem;
-        color: var(--ink-soft);
-        font-size: 0.95rem;
-        line-height: 1.6;
-      }
-
-      .controls {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-      }
-
-      .pill,
-      .action {
-        border: 1px solid rgba(23, 20, 17, 0.16);
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.4);
-        backdrop-filter: blur(12px);
-      }
-
-      .pill {
-        padding: 10px 14px;
-        font-size: 0.78rem;
-        color: var(--ink-soft);
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-      }
-
-      .action {
-        color: var(--ink);
-        padding: 12px 16px;
-        cursor: pointer;
-        text-decoration: none;
-        transition:
-          transform 180ms ease,
-          background-color 180ms ease,
-          border-color 180ms ease;
-      }
-
-      .action:hover {
-        transform: translateY(-1px);
-        background: rgba(255, 255, 255, 0.62);
-      }
-
-      .action:active {
-        transform: translateY(0);
-      }
-
-      .board {
-        display: grid;
-        grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.9fr);
-        gap: 18px;
-        align-items: start;
-      }
-
-      .panel {
-        position: relative;
-        border: 1px solid rgba(23, 20, 17, 0.14);
-        border-radius: var(--radius);
-        background: var(--panel);
-        box-shadow: var(--shadow);
-        overflow: hidden;
-        animation: fade-rise 420ms cubic-bezier(.2, .8, .2, 1) both;
-      }
-
-      .panel::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          linear-gradient(135deg, rgba(255, 255, 255, 0.42), transparent 28%),
-          linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 32%);
-        pointer-events: none;
-      }
-
-      .hero {
-        padding: 22px;
-        display: grid;
-        gap: 16px;
-        align-content: start;
-      }
-
-      .hero-top {
-        display: grid;
-        gap: 10px;
-      }
-
-      .hero-label {
-        display: grid;
-        gap: 8px;
-      }
-
-      .section-kicker {
-        text-transform: uppercase;
-        letter-spacing: 0.18em;
-        font-size: 11px;
-        color: var(--ink-soft);
-      }
-
-      .hero-title {
-        margin: 0;
-        font-family: "Fraunces", Georgia, serif;
-        font-size: clamp(1.7rem, 3.6vw, 3rem);
-        line-height: 0.98;
-        letter-spacing: -0.05em;
-      }
-
-      .hero-note {
-        margin: 0;
-        color: var(--ink-soft);
-        font-size: 0.88rem;
-        line-height: 1.55;
-      }
-
-      .summary-strip {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .summary-chip {
-        border-radius: 18px;
-        border: 1px solid rgba(23, 20, 17, 0.12);
-        background: rgba(255, 255, 255, 0.45);
-        padding: 12px 14px;
-        min-height: 92px;
-      }
-
-      .summary-chip span {
-        display: block;
-      }
-
-      .summary-chip .chip-label {
-        font-size: 0.68rem;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: var(--ink-soft);
-        margin-bottom: 8px;
-      }
-
-      .summary-chip .chip-value {
-        font-size: 1.25rem;
-        font-weight: 700;
-      }
-
-      .code-card {
-        position: relative;
-        border-radius: 26px;
-        border: 1px solid rgba(23, 20, 17, 0.14);
-        background:
-          linear-gradient(180deg, rgba(255, 252, 247, 0.94), rgba(243, 236, 224, 0.92));
-        padding: 18px;
-        display: grid;
-        gap: 12px;
-      }
-
-      .code-card::after {
-        content: "";
-        position: absolute;
-        inset: 14px;
-        border: 1px dashed rgba(23, 20, 17, 0.16);
-        border-radius: 18px;
-        pointer-events: none;
-      }
-
-      .code-stack {
-        position: relative;
-        z-index: 1;
-        display: grid;
-        gap: 14px;
-      }
-
-      .code-window {
-        min-height: 188px;
-        border-radius: 18px;
-        background: #11110f;
-        color: #f7f3ec;
-        display: grid;
-        align-items: center;
-        justify-items: center;
-        padding: 18px;
-        text-align: center;
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.06),
-          0 24px 42px rgba(23, 20, 17, 0.18);
-      }
-
-      .code-window code {
-        display: block;
-        font-size: clamp(2.9rem, 8vw, 6.2rem);
-        line-height: 0.9;
-        letter-spacing: 0.16em;
-        text-indent: 0.16em;
-        font-weight: 800;
-      }
-
-      .code-window small {
-        display: block;
-        margin-top: 10px;
-        color: rgba(247, 243, 236, 0.7);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        font-size: 0.68rem;
-      }
-
-      .meta-grid {
-        position: relative;
-        z-index: 1;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .meta-item {
-        border-radius: 16px;
-        background: rgba(23, 20, 17, 0.05);
-        padding: 12px 14px;
-        min-height: 78px;
-      }
-
-      .meta-item strong,
-      .meta-item span {
-        display: block;
-      }
-
-      .meta-item strong {
-        color: var(--ink-soft);
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        margin-bottom: 8px;
-      }
-
-      .meta-item span {
-        font-size: 0.9rem;
-        line-height: 1.45;
-        word-break: break-word;
-      }
-
-      .hero-actions {
-        position: relative;
-        z-index: 1;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px;
-        align-items: center;
-      }
-
-      .copy-button {
-        appearance: none;
-        border: none;
-        border-radius: 18px;
-        background: linear-gradient(180deg, #211c17 0%, #14120f 100%);
-        color: #f8f5ef;
-        min-height: 60px;
-        padding: 16px 22px;
-        font-size: 1rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        cursor: pointer;
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.08),
-          0 16px 32px rgba(23, 20, 17, 0.22);
-        transition:
-          transform 180ms ease,
-          box-shadow 180ms ease,
-          opacity 180ms ease,
-          background-color 180ms ease;
-      }
-
-      .copy-button::after {
-        content: " ↗";
-      }
-
-      .copy-button:hover:not(:disabled) {
-        transform: translateY(-1px);
-        box-shadow: 0 18px 36px rgba(23, 20, 17, 0.28);
-      }
-
-      .copy-button:disabled {
-        opacity: 0.45;
-        cursor: not-allowed;
-      }
-
-      .copy-feedback {
-        min-height: 1.5em;
-        font-size: 0.82rem;
-        color: var(--ink-soft);
-        text-align: right;
-      }
-
-      .copy-feedback.success {
-        color: var(--success);
-      }
-
-      .copy-feedback.error {
-        color: var(--danger);
-      }
-
-      .rail {
-        display: grid;
-        gap: 14px;
-      }
-
-      .state-panel,
-      .list-panel {
-        padding: 20px;
-      }
-
-      .state-panel {
-        min-height: 240px;
-        display: grid;
-        align-content: start;
-        gap: 14px;
-      }
-
-      .state-banner {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 10px 14px;
-        border-radius: 999px;
-        font-size: 0.76rem;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        width: fit-content;
-      }
-
-      .state-panel h2 {
-        margin: 0;
-        font-family: "Fraunces", Georgia, serif;
-        font-size: 1.55rem;
-        letter-spacing: -0.04em;
-      }
-
-      .state-panel p {
-        margin: 0;
-        color: var(--ink-soft);
-        line-height: 1.65;
-        font-size: 0.92rem;
-      }
-
-      .state-panel.is-ready {
-        background:
-          linear-gradient(180deg, rgba(12, 107, 62, 0.08), rgba(255, 251, 245, 0.72));
-      }
-
-      .state-panel.is-ready .state-banner {
-        background: var(--success-soft);
-        color: var(--success);
-      }
-
-      .state-panel.is-waiting {
-        background:
-          linear-gradient(180deg, rgba(143, 91, 22, 0.08), rgba(255, 251, 245, 0.72));
-      }
-
-      .state-panel.is-waiting .state-banner {
-        background: var(--warning-soft);
-        color: var(--warning);
-      }
-
-      .state-panel.is-alert,
-      .state-panel.is-error {
-        background:
-          linear-gradient(180deg, rgba(154, 47, 38, 0.08), rgba(255, 251, 245, 0.72));
-      }
-
-      .state-panel.is-alert .state-banner,
-      .state-panel.is-error .state-banner {
-        background: var(--danger-soft);
-        color: var(--danger);
-      }
-
-      .state-panel.is-empty .state-banner {
-        background: rgba(23, 20, 17, 0.08);
-        color: var(--ink-soft);
-      }
-
-      .list-panel h3 {
-        margin: 0 0 14px;
-        font-size: 0.94rem;
-        text-transform: uppercase;
-        letter-spacing: 0.14em;
-        color: var(--ink-soft);
-      }
-
-      .stack-list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 10px;
-      }
-
-      .stack-item {
-        border-radius: 16px;
-        border: 1px solid rgba(23, 20, 17, 0.1);
-        background: rgba(255, 255, 255, 0.46);
-        padding: 14px;
-        display: grid;
-        gap: 6px;
-        transition:
-          transform 180ms ease,
-          background-color 180ms ease,
-          border-color 180ms ease;
-      }
-
-      .stack-item:hover {
-        transform: translateY(-1px);
-        background: rgba(255, 255, 255, 0.62);
-      }
-
-      .stack-item strong,
-      .stack-item span,
-      .stack-item small {
-        display: block;
-      }
-
-      .stack-item strong {
-        font-size: 1rem;
-      }
-
-      .stack-item small {
-        color: var(--ink-soft);
-        line-height: 1.5;
-      }
-
-      .empty-note {
-        margin: 0;
-        color: var(--ink-soft);
-        line-height: 1.6;
-        font-size: 0.9rem;
-      }
-
-      @keyframes fade-rise {
-        from {
-          opacity: 0;
-          transform: translateY(10px);
-        }
-
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-
-      @media (max-width: 920px) {
-        .board {
-          grid-template-columns: 1fr;
-        }
-
-        .rail {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 720px) {
-        .shell {
-          width: min(100vw - 20px, 100%);
-          padding-top: 18px;
-          padding-bottom: 28px;
-        }
-
-        .headline {
-          font-size: clamp(1.45rem, 10vw, 2.7rem);
-          max-width: none;
-        }
-
-        .subhead {
-          font-size: 0.9rem;
-        }
-
-        .masthead {
-          gap: 12px;
-          margin-bottom: 14px;
-        }
-
-        .masthead,
-        .hero-top {
-          display: grid;
-          grid-template-columns: 1fr;
-        }
-
-        .controls {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          justify-content: stretch;
-          align-items: center;
-        }
-
-        .controls > * {
-          width: auto;
-        }
-
-        .hero-actions {
-          grid-template-columns: 1fr;
-        }
-
-        .summary-strip {
-          grid-template-columns: 1fr 1fr 1fr;
-        }
-
-        .meta-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .meta-item {
-          min-height: 72px;
-        }
-
-        .copy-feedback {
-          text-align: left;
-        }
-
-        .copy-button {
-          width: 100%;
-        }
-
-        .code-window {
-          min-height: 154px;
-        }
-
-        .code-window code {
-          font-size: clamp(2.3rem, 14vw, 4.3rem);
-        }
-      }
-    </style>
+    <script>${JS_THEME_TOGGLE}<\/script>
+    <style>${baseStyles()}${pageStyles()}</style>
   </head>
   <body>
+    <div class="sync-bar" id="sync-bar" style="width:0%"></div>
+
     <div class="shell">
-      <header class="masthead">
-        <div class="titleblock">
-          <div class="eyebrow">Outlook Mailbox / OTP Panel</div>
-          <h1 class="headline">See code. Copy. Leave.</h1>
-          <p class="subhead">
-            这是一个直接面向验证码动作的工具页，不是邮件后台。主任务只有一个，
-            打开后立刻确认最新 code，点一下复制，然后离开。
-          </p>
+      <nav class="topbar">
+        <div class="topbar-left">
+          <span class="topbar-brand">OTP Panel</span>
+          <div class="status-dot" id="status-pill">syncing</div>
         </div>
-        <div class="controls">
-          <div class="pill" id="status-pill">Syncing panel...</div>
-          <a class="action" href="/connect/outlook">OAuth launcher</a>
-          <button class="action" id="refresh-button" type="button">Refresh</button>
+        <div class="topbar-right">
+          <a class="nav-link" href="/connect/outlook">OAuth Launcher</a>
+          <button class="nav-link" id="refresh-button" type="button">↻ Refresh</button>
+          <button class="theme-toggle" id="theme-toggle" type="button" onclick="__toggleTheme()" title="切换主题">☀</button>
         </div>
-      </header>
+      </nav>
 
       <main class="board">
-        <section class="panel hero">
-          <div class="hero-top">
-            <div class="hero-label">
-              <div class="section-kicker">Primary Card</div>
-              <h2 class="hero-title" id="hero-title">Latest verification code</h2>
-              <p class="hero-note" id="hero-note">
-                首屏只服务 scan-and-copy，不让历史和异常信息抢走主位。
-              </p>
+        <section class="hero">
+          <div class="code-card animate-in">
+            <div class="code-display-area" id="code-window">
+              <div id="code-content">
+                <div class="code-skel-wrap" id="code-skeleton">
+                  <div class="skel code-skel-bar"></div>
+                  <div class="skel code-skel-line"></div>
+                </div>
+                <span class="code-value" id="code-display" style="display:none"></span>
+                <span class="code-caption" id="code-caption" style="display:none"></span>
+              </div>
             </div>
+
+            <div class="copy-row">
+              <button class="copy-btn" id="copy-button" type="button" disabled>Copy Code</button>
+              <div class="copy-feedback" id="copy-feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="meta-grid">
+              <div class="meta-cell">
+                <span class="meta-label">Source</span>
+                <span class="meta-value" id="meta-mailbox">--</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-label">Received</span>
+                <span class="meta-value" id="meta-received" title="">--</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-label">Signal</span>
+                <span class="meta-value" id="meta-signal">--</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-label">Coverage</span>
+                <span class="meta-value" id="meta-coverage">--</span>
+              </div>
+            </div>
+            
+            <div class="main-recent-codes" id="main-recent-codes" style="display: none;"></div>
           </div>
 
-          <div class="code-card">
-            <div class="code-stack">
-              <div class="code-window" id="code-window">
-                <div>
-                  <code id="code-display">------</code>
-                  <small id="code-caption">Waiting for panel data</small>
-                </div>
-              </div>
-
-              <div class="hero-actions">
-                <button class="copy-button" id="copy-button" type="button" disabled>
-                  Copy latest code
-                </button>
-                <div class="copy-feedback" id="copy-feedback" aria-live="polite"></div>
-              </div>
-
-              <div class="meta-grid">
-                <div class="meta-item">
-                  <strong>Source mailbox</strong>
-                  <span id="meta-mailbox">--</span>
-                </div>
-                <div class="meta-item">
-                  <strong>Received</strong>
-                  <span id="meta-received">--</span>
-                </div>
-                <div class="meta-item">
-                  <strong>Signal type</strong>
-                  <span id="meta-signal">--</span>
-                </div>
-                <div class="meta-item">
-                  <strong>Coverage</strong>
-                  <span id="meta-coverage">--</span>
-                </div>
-              </div>
+          <div class="summary-row animate-in delay-1">
+            <div class="summary-cell">
+              <span class="summary-label">Current Codes</span>
+              <span class="summary-value" id="metric-codes">0</span>
             </div>
-          </div>
-
-          <div class="summary-strip">
-            <div class="summary-chip">
-              <span class="chip-label">Current codes</span>
-              <span class="chip-value" id="metric-codes">0</span>
+            <div class="summary-cell">
+              <span class="summary-label">Mailboxes</span>
+              <span class="summary-value" id="metric-mailboxes">0</span>
             </div>
-            <div class="summary-chip">
-              <span class="chip-label">Mailboxes</span>
-              <span class="chip-value" id="metric-mailboxes">0</span>
-            </div>
-            <div class="summary-chip">
-              <span class="chip-label">Unhealthy</span>
-              <span class="chip-value" id="metric-unhealthy">0</span>
+            <div class="summary-cell">
+              <span class="summary-label">Unhealthy</span>
+              <span class="summary-value" id="metric-unhealthy">0</span>
             </div>
           </div>
         </section>
 
-        <section class="rail">
-          <section class="panel state-panel is-empty" id="state-panel">
-            <div class="state-banner" id="state-badge">No data yet</div>
-            <h2 id="state-title">Panel is waking up</h2>
-            <p id="state-description">
-              页面会自动读取 /api/otp-panel。准备好后，主卡会直接切成可复制状态。
-            </p>
-            <p id="generated-at">Last sync: --</p>
-          </section>
+        <section class="sidebar">
+          <div class="state-card animate-in delay-1" id="state-panel">
+            <div class="state-header">
+              <div class="state-indicator"></div>
+              <span class="state-label" id="state-badge">Loading</span>
+            </div>
+            <h3 class="state-title" id="state-title">Panel is waking up</h3>
+            <p class="state-desc" id="state-description">正在读取 /api/otp-panel 数据...</p>
+            <div class="state-sync" id="generated-at">Last sync: --</div>
+          </div>
 
-          <section class="panel list-panel">
-            <h3>Recent Codes</h3>
-            <ul class="stack-list" id="recent-codes"></ul>
-            <p class="empty-note" id="recent-codes-empty">暂无历史验证码。</p>
-          </section>
+          <div class="sidebar-section animate-in delay-2">
+            <h4 class="section-title">Recent Codes</h4>
+            <ul class="list-group" id="recent-codes"></ul>
+            <p class="list-empty" id="recent-codes-empty">暂无历史验证码</p>
+          </div>
 
-          <section class="panel list-panel">
-            <h3>Secondary Signals</h3>
-            <ul class="stack-list" id="secondary-signals"></ul>
-            <p class="empty-note" id="secondary-signals-empty">当前没有次级 signal。</p>
-          </section>
+          <div class="sidebar-section animate-in delay-3">
+            <h4 class="section-title">Secondary Signals</h4>
+            <ul class="list-group" id="secondary-signals"></ul>
+            <p class="list-empty" id="secondary-signals-empty">当前没有次级 signal</p>
+          </div>
 
-          <section class="panel list-panel">
-            <h3>Mailbox Health</h3>
-            <ul class="stack-list" id="mailbox-health"></ul>
-            <p class="empty-note" id="mailbox-health-empty">还没有 mailbox 数据。</p>
-          </section>
+          <div class="sidebar-section animate-in delay-4">
+            <h4 class="section-title">Mailbox Health</h4>
+            <ul class="list-group" id="mailbox-health"></ul>
+            <p class="list-empty" id="mailbox-health-empty">还没有 mailbox 数据</p>
+          </div>
         </section>
       </main>
     </div>
 
     <script>
-      const state = {
-        panel: null,
-        copying: false,
-        refreshTimer: null,
-      };
+      ${clientUtilScripts()}
 
-      const elements = {
-        statusPill: document.getElementById("status-pill"),
-        refreshButton: document.getElementById("refresh-button"),
-        heroTitle: document.getElementById("hero-title"),
-        heroNote: document.getElementById("hero-note"),
-        codeDisplay: document.getElementById("code-display"),
-        codeCaption: document.getElementById("code-caption"),
-        metaMailbox: document.getElementById("meta-mailbox"),
-        metaReceived: document.getElementById("meta-received"),
-        metaSignal: document.getElementById("meta-signal"),
-        metaCoverage: document.getElementById("meta-coverage"),
-        metricCodes: document.getElementById("metric-codes"),
-        metricMailboxes: document.getElementById("metric-mailboxes"),
-        metricUnhealthy: document.getElementById("metric-unhealthy"),
-        copyButton: document.getElementById("copy-button"),
-        copyFeedback: document.getElementById("copy-feedback"),
-        statePanel: document.getElementById("state-panel"),
+      var SYNC_MS = 15000, FEEDBACK_MS = 1800;
+
+      var state = { panel: null, copying: false, timer: null, cd: null, elapsed: 0 };
+
+      var el = {
+        syncBar: document.getElementById("sync-bar"),
+        pill: document.getElementById("status-pill"),
+        refresh: document.getElementById("refresh-button"),
+        heroTitle: null,
+        skel: document.getElementById("code-skeleton"),
+        codeVal: document.getElementById("code-display"),
+        codeCap: document.getElementById("code-caption"),
+        mailbox: document.getElementById("meta-mailbox"),
+        received: document.getElementById("meta-received"),
+        signal: document.getElementById("meta-signal"),
+        coverage: document.getElementById("meta-coverage"),
+        codes: document.getElementById("metric-codes"),
+        boxes: document.getElementById("metric-mailboxes"),
+        sick: document.getElementById("metric-unhealthy"),
+        copyBtn: document.getElementById("copy-button"),
+        copyFb: document.getElementById("copy-feedback"),
+        stateCard: document.getElementById("state-panel"),
         stateBadge: document.getElementById("state-badge"),
         stateTitle: document.getElementById("state-title"),
-        stateDescription: document.getElementById("state-description"),
-        generatedAt: document.getElementById("generated-at"),
-        recentCodes: document.getElementById("recent-codes"),
-        recentCodesEmpty: document.getElementById("recent-codes-empty"),
-        secondarySignals: document.getElementById("secondary-signals"),
-        secondarySignalsEmpty: document.getElementById("secondary-signals-empty"),
-        mailboxHealth: document.getElementById("mailbox-health"),
-        mailboxHealthEmpty: document.getElementById("mailbox-health-empty"),
+        stateDesc: document.getElementById("state-description"),
+        syncAt: document.getElementById("generated-at"),
+        recentList: document.getElementById("recent-codes"),
+        recentEmpty: document.getElementById("recent-codes-empty"),
+        secList: document.getElementById("secondary-signals"),
+        secEmpty: document.getElementById("secondary-signals-empty"),
+        healthList: document.getElementById("mailbox-health"),
+        healthEmpty: document.getElementById("mailbox-health-empty"),
+        mainRecentCodes: document.getElementById("main-recent-codes"),
       };
 
-      function formatDateTime(value) {
-        if (!value) {
-          return "--";
-        }
-
-        return new Intl.DateTimeFormat("zh-CN", {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }).format(new Date(value));
+      function showSkel() {
+        el.skel.style.display = "";
+        el.codeVal.style.display = "none";
+        el.codeCap.style.display = "none";
       }
 
-      function setCopyFeedback(text, tone) {
-        elements.copyFeedback.textContent = text;
-        elements.copyFeedback.className = "copy-feedback" + (tone ? " " + tone : "");
+      function showCode(v, cap) {
+        el.skel.style.display = "none";
+        el.codeVal.style.display = "";
+        el.codeVal.textContent = v;
+        el.codeCap.style.display = "";
+        el.codeCap.textContent = cap;
       }
 
-      function setLoadingState() {
-        elements.statusPill.textContent = "Syncing panel...";
-        elements.refreshButton.disabled = true;
+      function startCountdown() {
+        if (state.cd) clearInterval(state.cd);
+        state.elapsed = 0;
+        el.syncBar.classList.remove("is-syncing");
+        state.cd = setInterval(function() {
+          state.elapsed += 200;
+          el.syncBar.style.width = Math.min(state.elapsed / SYNC_MS * 100, 100) + "%";
+        }, 200);
+      }
+
+      function showSyncing() {
+        if (state.cd) clearInterval(state.cd);
+        el.syncBar.style.width = "100%";
+        el.syncBar.classList.add("is-syncing");
+      }
+
+      function setFb(t, tone) {
+        el.copyFb.textContent = t;
+        el.copyFb.className = "copy-feedback" + (tone ? " " + tone : "");
       }
 
       function setStateTone(mode) {
-        elements.statePanel.className = "panel state-panel " + mode;
+        el.stateCard.className = "state-card animate-in delay-1 " + mode;
       }
 
-      function clearList(element) {
-        while (element.firstChild) {
-          element.removeChild(element.firstChild);
-        }
+      function pillClass(status) {
+        if (status === "ready") return "status-dot is-ready";
+        if (status === "waiting_for_code") return "status-dot is-waiting";
+        if (status === "delivery_path_unhealthy") return "status-dot is-alert";
+        return "status-dot";
       }
 
-      function renderList(element, emptyElement, items, renderItem) {
-        clearList(element);
-        if (!items.length) {
-          emptyElement.hidden = false;
-          return;
-        }
+      function renderPrimary(p) {
+        var s = p.primarySignal;
+        el.codes.textContent = p.summary.currentVerificationCodeCount;
+        el.boxes.textContent = p.summary.mailboxCount;
+        el.sick.textContent = p.summary.unhealthyMailboxCount;
+        el.syncAt.textContent = "Last sync: " + formatDateTime(p.generatedAt);
 
-        emptyElement.hidden = true;
-        for (const item of items) {
-          element.appendChild(renderItem(item));
-        }
-      }
-
-      function makeStackItem(title, lines) {
-        const item = document.createElement("li");
-        item.className = "stack-item";
-
-        const strong = document.createElement("strong");
-        strong.textContent = title;
-        item.appendChild(strong);
-
-        for (const line of lines) {
-          const small = document.createElement("small");
-          small.textContent = line;
-          item.appendChild(small);
-        }
-
-        return item;
-      }
-
-      function renderPrimarySignal(panel) {
-        const primary = panel.primarySignal;
-
-        elements.metricCodes.textContent = String(panel.summary.currentVerificationCodeCount);
-        elements.metricMailboxes.textContent = String(panel.summary.mailboxCount);
-        elements.metricUnhealthy.textContent = String(panel.summary.unhealthyMailboxCount);
-        elements.generatedAt.textContent = "Last sync: " + formatDateTime(panel.generatedAt);
-
-        if (!primary) {
-          elements.copyButton.disabled = true;
-          elements.metaMailbox.textContent = "--";
-          elements.metaReceived.textContent = "--";
-          elements.metaSignal.textContent = "--";
-          elements.metaCoverage.textContent = "--";
-
-          if (panel.status === "waiting_for_code") {
-            elements.heroTitle.textContent = "Waiting for the next code";
-            elements.heroNote.textContent = "当前没有新验证码，但链路健康。现在最合理的动作是继续等。";
-            elements.codeDisplay.textContent = "WAIT";
-            elements.codeCaption.textContent = "Delivery path healthy";
-          } else if (panel.status === "delivery_path_unhealthy") {
-            elements.heroTitle.textContent = "Delivery path needs attention";
-            elements.heroNote.textContent = "这不是普通等待，问题更像在订阅、恢复或认证链路。";
-            elements.codeDisplay.textContent = "ALERT";
-            elements.codeCaption.textContent = "Recovery or auth issue detected";
+        if (!s) {
+          el.copyBtn.disabled = true;
+          el.copyBtn.className = "copy-btn";
+          el.mailbox.textContent = "--";
+          el.received.textContent = "--";
+          el.received.title = "";
+          el.signal.textContent = "--";
+          el.coverage.textContent = "--";
+          if (p.status === "waiting_for_code") {
+            showCode("WAIT", "Delivery path healthy — no new code yet");
+          } else if (p.status === "delivery_path_unhealthy") {
+            showCode("ALERT", "Recovery or auth issue detected");
           } else {
-            elements.heroTitle.textContent = "Panel is empty";
-            elements.heroNote.textContent = "系统里还没有可展示的验证码历史。";
-            elements.codeDisplay.textContent = "----";
-            elements.codeCaption.textContent = "No verification code yet";
+            showCode("—", "No verification code yet");
           }
-
           return;
         }
 
-        elements.copyButton.disabled = state.copying;
-        elements.heroTitle.textContent = "Latest verification code";
-        elements.heroNote.textContent = "主卡直接显示可信信息，复制动作在卡内闭环完成。";
-        elements.codeDisplay.textContent = primary.value;
-        elements.codeCaption.textContent = primary.acrossMailboxCount > 1
-          ? "Across " + primary.acrossMailboxCount + " mailboxes"
-          : "Single mailbox source";
-        elements.metaMailbox.textContent = primary.mailboxEmailAddress || primary.mailboxId;
-        elements.metaReceived.textContent = formatDateTime(primary.receivedAt);
-        elements.metaSignal.textContent = primary.signalType;
-        elements.metaCoverage.textContent = primary.acrossMailboxCount > 1
-          ? "Current latest code across " + primary.acrossMailboxCount + " mailboxes"
-          : "Current latest code";
+        el.copyBtn.disabled = state.copying;
+        el.copyBtn.className = "copy-btn";
+        showCode(s.value, s.acrossMailboxCount > 1 ? "Across " + s.acrossMailboxCount + " mailboxes" : "Single mailbox source");
+        el.mailbox.textContent = s.mailboxEmailAddress || s.mailboxId;
+        el.received.textContent = formatRelativeTime(s.receivedAt);
+        el.received.title = formatFullDateTime(s.receivedAt);
+        el.signal.textContent = s.signalType;
+        el.coverage.textContent = s.acrossMailboxCount > 1 ? s.acrossMailboxCount + " mailboxes" : "Single source";
+        
+        var rc = p.recentCodes || [];
+        var inlineRc = el.mainRecentCodes;
+        if (!inlineRc) return;
+        
+        if (rc.length === 0) {
+          inlineRc.style.display = "none";
+          inlineRc.innerHTML = "";
+          return;
+        }
+        
+        inlineRc.style.display = "flex";
+        inlineRc.innerHTML = "";
+        
+        var toShow = rc.slice(0, 2);
+        for (var i = 0; i < toShow.length; i++) {
+          var hs = toShow[i];
+          var card = document.createElement('div');
+          card.className = "inline-recent-card animate-in delay-" + (i + 1);
+          card.setAttribute("title", "Click to copy " + hs.value);
+          
+          var left = document.createElement('div');
+          left.className = "inline-recent-code";
+          left.textContent = hs.value;
+          
+          var right = document.createElement('div');
+          right.className = "inline-recent-meta";
+          
+          var emailInfo = document.createElement('div');
+          emailInfo.textContent = hs.mailboxEmailAddress || hs.mailboxId;
+          emailInfo.style.fontWeight = "600";
+          emailInfo.style.marginBottom = "2px";
+          
+          var timeInfo = document.createElement('div');
+          timeInfo.textContent = formatRelativeTime(hs.receivedAt);
+          
+          right.appendChild(emailInfo);
+          right.appendChild(timeInfo);
+          
+          card.appendChild(left);
+          card.appendChild(right);
+          
+          (function(codeVal, copyCard) {
+            copyCard.addEventListener('click', function() {
+              if (state.copying) return;
+              var originalColor = copyCard.style.backgroundColor;
+              copyCard.style.backgroundColor = "rgba(52, 211, 153, 0.15)";
+              state.copying = true;
+              copyText(codeVal, function() {
+                setFb("已复制 " + codeVal, "success");
+                setTimeout(function() { 
+                  copyCard.style.backgroundColor = originalColor; 
+                  state.copying = false;
+                }, FEEDBACK_MS);
+              }, function() {
+                setFb("复制失败", "error");
+                setTimeout(function() { 
+                  copyCard.style.backgroundColor = originalColor; 
+                  state.copying = false;
+                }, FEEDBACK_MS);
+              });
+            });
+          })(hs.value, card);
+          
+          inlineRc.appendChild(card);
+        }
       }
 
-      function renderState(panel) {
-        if (panel.status === "ready") {
+      function renderState(p) {
+        if (p.status === "ready") {
           setStateTone("is-ready");
-          elements.stateBadge.textContent = "Ready to copy";
-          elements.stateTitle.textContent = "Primary path is clear";
-          elements.stateDescription.textContent = panel.summary.unhealthyMailboxCount > 0
-            ? "最新验证码已经可复制，但仍有部分 mailbox 异常。主任务可继续完成，异常不被隐藏。"
-            : "最新验证码已经可复制，首页现在就是一个干净的 scan-and-copy 工具。";
-          return;
-        }
-
-        if (panel.status === "waiting_for_code") {
+          el.stateBadge.textContent = "Ready";
+          el.stateTitle.textContent = "可以复制";
+          el.stateDesc.textContent = p.summary.unhealthyMailboxCount > 0
+            ? "最新验证码可复制，但仍有部分 mailbox 异常。"
+            : "最新验证码已就绪。";
+        } else if (p.status === "waiting_for_code") {
           setStateTone("is-waiting");
-          elements.stateBadge.textContent = "Waiting";
-          elements.stateTitle.textContent = "No new code yet";
-          elements.stateDescription.textContent = "链路健康，但当前没有新的 verification code。这个状态应该安静，而不是吓人。";
-          return;
-        }
-
-        if (panel.status === "delivery_path_unhealthy") {
+          el.stateBadge.textContent = "Waiting";
+          el.stateTitle.textContent = "等待新验证码";
+          el.stateDesc.textContent = "链路健康，当前没有新的 verification code。";
+        } else if (p.status === "delivery_path_unhealthy") {
           setStateTone("is-alert");
-          elements.stateBadge.textContent = "Path unhealthy";
-          elements.stateTitle.textContent = "This is not just waiting";
-          elements.stateDescription.textContent = "当前没有验证码，而且至少一个 mailbox 处于 delayed、recovery、reauth 或其他异常状态。";
-          return;
+          el.stateBadge.textContent = "Unhealthy";
+          el.stateTitle.textContent = "需要检查";
+          el.stateDesc.textContent = "至少一个 mailbox 处于异常状态。";
+        } else {
+          setStateTone("");
+          el.stateBadge.textContent = "Empty";
+          el.stateTitle.textContent = "暂无数据";
+          el.stateDesc.textContent = "系统还没有 mailbox 或验证码历史。";
         }
-
-        setStateTone("is-empty");
-        elements.stateBadge.textContent = "Empty";
-        elements.stateTitle.textContent = "Nothing stored yet";
-        elements.stateDescription.textContent = "系统还没有 mailbox 或可展示历史。面板会在有数据后自动变成可操作状态。";
       }
 
-      function renderLists(panel) {
-        renderList(
-          elements.recentCodes,
-          elements.recentCodesEmpty,
-          panel.recentCodes,
-          (entry) => makeStackItem(entry.value, [
-            (entry.mailboxEmailAddress || entry.mailboxId) + " / " + formatDateTime(entry.receivedAt),
-            "Signal: " + entry.signalType,
-          ]),
-        );
-
-        renderList(
-          elements.secondarySignals,
-          elements.secondarySignalsEmpty,
-          panel.secondarySignals,
-          (entry) => makeStackItem(entry.value, [
-            entry.signalType + " / " + (entry.mailboxEmailAddress || entry.mailboxId),
-            "Seen at " + formatDateTime(entry.receivedAt),
-          ]),
-        );
-
-        renderList(
-          elements.mailboxHealth,
-          elements.mailboxHealthEmpty,
-          panel.mailboxes,
-          (entry) => makeStackItem(
-            entry.emailAddress,
-            [
-              "State: " + (entry.lifecycleState || "missing_snapshot"),
-              entry.recentErrorSummary ? "Note: " + entry.recentErrorSummary : entry.healthy
-                ? "Path looks healthy"
-                : "Needs inspection",
-            ],
-          ),
-        );
+      function renderLists(p) {
+        renderList(el.recentList, el.recentEmpty, p.recentCodes, function(e) {
+          return makeListItem(e.value, (e.mailboxEmailAddress || e.mailboxId) + " · " + formatRelativeTime(e.receivedAt));
+        });
+        renderList(el.secList, el.secEmpty, p.secondarySignals, function(e) {
+          return makeListItem(e.value, e.signalType + " · " + (e.mailboxEmailAddress || e.mailboxId));
+        });
+        renderList(el.healthList, el.healthEmpty, p.mailboxes, function(e) {
+          return makeListItem(e.emailAddress, (e.lifecycleState || "unknown") + (e.healthy ? " ✓" : " ⚠"));
+        });
       }
 
-      function renderPanel(panel) {
-        state.panel = panel;
-        elements.statusPill.textContent = panel.status.replaceAll("_", " ");
-        elements.refreshButton.disabled = false;
-        renderPrimarySignal(panel);
-        renderState(panel);
-        renderLists(panel);
+      function renderPanel(p) {
+        state.panel = p;
+        el.pill.className = pillClass(p.status);
+        el.pill.textContent = p.status.replace(/_/g, " ");
+        el.refresh.disabled = false;
+        renderPrimary(p);
+        renderState(p);
+        renderLists(p);
+        startCountdown();
       }
 
-      async function copyLatestCode() {
-        const primary = state.panel && state.panel.primarySignal;
-        if (!primary || state.copying) {
-          return;
-        }
-
+      function doCopy() {
+        var s = state.panel && state.panel.primarySignal;
+        if (!s || state.copying) return;
         state.copying = true;
-        elements.copyButton.disabled = true;
-        elements.copyButton.textContent = "Copying...";
-
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(primary.value);
-          } else {
-            const textarea = document.createElement("textarea");
-            textarea.value = primary.value;
-            textarea.setAttribute("readonly", "true");
-            textarea.style.position = "absolute";
-            textarea.style.left = "-9999px";
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand("copy");
-            document.body.removeChild(textarea);
+        el.copyBtn.disabled = true;
+        el.copyBtn.textContent = "Copying...";
+        copyText(s.value,
+          function() {
+            setFb("已复制", "success");
+            el.copyBtn.textContent = "Copied ✓";
+            el.copyBtn.className = "copy-btn is-success";
+          },
+          function() {
+            setFb("复制失败", "error");
+            el.copyBtn.textContent = "Failed";
+            el.copyBtn.className = "copy-btn is-error";
           }
-
-          setCopyFeedback("已复制", "success");
-          elements.copyButton.textContent = "Copied";
-        } catch (error) {
-          setCopyFeedback("复制失败，请重试", "error");
-          elements.copyButton.textContent = "Copy failed";
-        } finally {
+        );
+        setTimeout(function() {
           state.copying = false;
-          window.setTimeout(() => {
-            const activePrimary = state.panel && state.panel.primarySignal;
-            elements.copyButton.disabled = !activePrimary;
-            elements.copyButton.textContent = "Copy latest code";
-          }, 900);
-        }
+          var a = state.panel && state.panel.primarySignal;
+          el.copyBtn.disabled = !a;
+          el.copyBtn.textContent = "Copy Code";
+          el.copyBtn.className = "copy-btn";
+        }, FEEDBACK_MS);
       }
 
       async function loadPanel() {
-        setLoadingState();
-
+        showSyncing();
+        el.pill.textContent = "syncing";
+        el.refresh.disabled = true;
         try {
-          const response = await fetch("/api/otp-panel", {
-            headers: {
-              accept: "application/json",
-            },
-          });
-
-          if (!response.ok) {
-            throw new Error("otp_panel_fetch_failed:" + response.status);
-          }
-
-          const panel = await response.json();
-          renderPanel(panel);
-          setCopyFeedback("", "");
-        } catch (error) {
-          elements.refreshButton.disabled = false;
-          elements.statusPill.textContent = "panel fetch failed";
+          var r = await fetch("/api/otp-panel", { headers: { accept: "application/json" } });
+          if (!r.ok) throw new Error("fetch_failed:" + r.status);
+          renderPanel(await r.json());
+          setFb("", "");
+        } catch (e) {
+          el.refresh.disabled = false;
+          el.pill.className = "status-dot is-alert";
+          el.pill.textContent = "error";
           setStateTone("is-error");
-          elements.stateBadge.textContent = "Read error";
-          elements.stateTitle.textContent = "Could not load panel";
-          elements.stateDescription.textContent = "首页读接口加载失败。先修这个，再谈复制体验。";
-          elements.generatedAt.textContent = "Last sync: failed";
-          elements.copyButton.disabled = true;
-          elements.codeDisplay.textContent = "ERROR";
-          elements.codeCaption.textContent = "Could not reach /api/otp-panel";
-          setCopyFeedback("接口读取失败", "error");
+          el.stateBadge.textContent = "Error";
+          el.stateTitle.textContent = "加载失败";
+          el.stateDesc.textContent = "无法读取 /api/otp-panel";
+          el.syncAt.textContent = "Last sync: failed";
+          el.copyBtn.disabled = true;
+          showCode("ERR", "Could not reach /api/otp-panel");
+          setFb("接口读取失败", "error");
+          startCountdown();
         }
       }
 
-      elements.refreshButton.addEventListener("click", () => {
-        loadPanel();
-      });
-      elements.copyButton.addEventListener("click", () => {
-        copyLatestCode();
-      });
-
+      el.refresh.addEventListener("click", loadPanel);
+      el.copyBtn.addEventListener("click", doCopy);
       loadPanel();
-      state.refreshTimer = window.setInterval(loadPanel, 15000);
+      state.timer = setInterval(loadPanel, SYNC_MS);
     </script>
   </body>
 </html>`;

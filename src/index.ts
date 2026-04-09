@@ -801,6 +801,27 @@ async function handleRequestInner(
     );
   }
 
+  if (url.pathname === "/api/auth/login") {
+    if (request.method !== "POST") {
+      return methodNotAllowed(["POST"]);
+    }
+    
+    const body = await readJsonObject(request, "request body must be valid JSON");
+    const expectedPassword = env.PHASE0_OPERATOR_PASSWORD;
+    const expectedUsername = env.PHASE0_OPERATOR_USERNAME || "world";
+    
+    if (body.username === expectedUsername && body.password === expectedPassword) {
+      const token = btoa(`${body.username}:${body.password}`);
+      return json({ success: true }, {
+        headers: {
+          "Set-Cookie": `operator_auth_token=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`
+        }
+      });
+    }
+    
+    return json({ message: "Invalid username or password" }, { status: 401 });
+  }
+
   if (url.pathname === "/api/hits") {
     if (request.method !== "GET") {
       return methodNotAllowed(["GET"]);
